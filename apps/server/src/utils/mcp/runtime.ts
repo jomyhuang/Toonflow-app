@@ -58,7 +58,7 @@ export function reloadMcpRuntime() {
         }
         try {
           const listening = once(server, "listening");
-          server.listen(port, "127.0.0.1");
+          server.listen(port, process.env.TOONFLOW_MCP_HOST || "127.0.0.1");
           await listening;
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") continue;

@@ -2,8 +2,11 @@ services:
   toonflow:
     build: .
     init: true
+    environment:
+      - TOONFLOW_MCP_HOST=0.0.0.0
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"
+      - "127.0.0.1:10588:10588"
     volumes:
       - ./data:/app/data
