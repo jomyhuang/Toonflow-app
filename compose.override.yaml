@@ -1,5 +1,0 @@
-services:
-  toonflow:
-    volumes:
-      - ./data/settings.json:/app/data/settings.json
-      - ./data/providers:/app/data/providers
