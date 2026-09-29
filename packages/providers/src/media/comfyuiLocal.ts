@@ -41,7 +41,39 @@ const rules = [
     field: "firstFrameNodeId" as const,
     title: "视频首帧 LoadImage 节点 ID（可选）",
     value: "",
-    props: { placeholder: "工作流里承接首帧图片的 LoadImage 节点编号；不填则忽略传入的首帧" },
+    props: { placeholder: "图生视频工作流里承接首帧图片的 LoadImage 节点编号" },
+  },
+  {
+    type: "input",
+    field: "videoI2VWorkflow" as const,
+    title: "图生视频工作流（API 格式 JSON，带首帧时优先使用）",
+    value: "",
+    props: { placeholder: "含首帧输入（LoadImage→H3 i2v）的工作流；留空则始终用上面的视频工作流" },
+  },
+  {
+    type: "input",
+    field: "videoI2VPromptNodeId" as const,
+    title: "图生视频提示词节点 ID",
+    value: "",
+  },
+  {
+    type: "input",
+    field: "promptField" as const,
+    title: "图片提示词字段名",
+    value: "text",
+    props: { placeholder: "提示词注入到节点的哪个输入；Qwen 模板填 prompt，SD 模板填 text" },
+  },
+  {
+    type: "input",
+    field: "videoPromptField" as const,
+    title: "视频提示词字段名",
+    value: "prompt",
+  },
+  {
+    type: "input",
+    field: "videoI2VPromptField" as const,
+    title: "图生视频提示词字段名",
+    value: "prompt",
   },
 ];
 
@@ -64,10 +96,10 @@ function parseWorkflow(source: unknown, kind: string): ComfyWorkflow {
   return workflow as ComfyWorkflow;
 }
 
-function injectPrompt(workflow: ComfyWorkflow, nodeId: string, prompt: string) {
+function injectPrompt(workflow: ComfyWorkflow, nodeId: string, field: string, prompt: string) {
   const node = workflow[nodeId];
   if (!node || !node.inputs) throw new Error(`工作流里找不到提示词节点 ${nodeId}，请核对设置中的节点 ID`);
-  node.inputs.text = prompt;
+  node.inputs[field || "text"] = prompt;
 }
 
 // ACT: 每次生成随机化种子，否则同一提示词会复用工作流里固定的 seed 得到同一张图。
@@ -225,7 +257,7 @@ export default {
 
   async generateImage(this: ProviderContext, request: ImageRequest) {
     const workflow = parseWorkflow(this.config.imageWorkflow, "文生图");
-    injectPrompt(workflow, String(this.config.promptNodeId || "6"), request.prompt);
+    injectPrompt(workflow, String(this.config.promptNodeId || "6"), String(this.config.promptField || "text"), request.prompt);
     randomizeSeeds(workflow);
     const { base, outputs } = await runWorkflow(this, workflow);
     const files = outputFiles(outputs).filter(file => mediaTypeOf(file.filename) === "image");
@@ -234,10 +266,15 @@ export default {
   },
 
   async generateVideo(this: ProviderContext, request: VideoRequest) {
-    const workflow = parseWorkflow(this.config.videoWorkflow, "视频");
-    injectPrompt(workflow, String(this.config.videoPromptNodeId || "6"), request.prompt);
+    const useI2V = !!request.firstFrame && String(this.config.videoI2VWorkflow || "").trim().length > 0;
+    const kind = useI2V ? "图生视频" : "视频";
+    const workflow = parseWorkflow(useI2V ? this.config.videoI2VWorkflow : this.config.videoWorkflow, kind);
+    const promptNodeId = String((useI2V ? this.config.videoI2VPromptNodeId : this.config.videoPromptNodeId) || "6");
+    const promptField = String((useI2V ? this.config.videoI2VPromptField : this.config.videoPromptField) || "text");
+    injectPrompt(workflow, promptNodeId, promptField, request.prompt);
     const firstFrameNodeId = String(this.config.firstFrameNodeId || "").trim();
     if (request.firstFrame) {
+      if (!useI2V) throw new Error("本次带了首帧图片，但未配置图生视频工作流（设置中的「图生视频工作流」为空）");
       if (!firstFrameNodeId) throw new Error("本次带了首帧图片，但设置里没填「视频首帧 LoadImage 节点 ID」");
       const node = workflow[firstFrameNodeId];
       if (!node || !node.inputs) throw new Error(`工作流里找不到首帧节点 ${firstFrameNodeId}`);
