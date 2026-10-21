@@ -71,6 +71,32 @@ const rules = [
   },
   {
     type: "input",
+    field: "imageEditWorkflow" as const,
+    title: "图生图工作流（API 格式 JSON，带参考图时优先使用）",
+    value: "",
+    props: { placeholder: "Qwen-Image-Edit 等参考图编辑工作流；留空则忽略参考图" },
+  },
+  {
+    type: "input",
+    field: "imageEditPromptNodeId" as const,
+    title: "图生图提示词节点 ID",
+    value: "",
+  },
+  {
+    type: "input",
+    field: "imageEditPromptField" as const,
+    title: "图生图提示词字段名",
+    value: "prompt",
+  },
+  {
+    type: "input",
+    field: "imageEditRefNodeIds" as const,
+    title: "参考图 LoadImage 节点 ID（逗号分隔）",
+    value: "",
+    props: { placeholder: "如 470,475——参考图会上传并填入这些节点" },
+  },
+  {
+    type: "input",
     field: "videoI2VPromptField" as const,
     title: "图生视频提示词字段名",
     value: "prompt",
@@ -256,8 +282,23 @@ export default {
   ],
 
   async generateImage(this: ProviderContext, request: ImageRequest) {
-    const workflow = parseWorkflow(this.config.imageWorkflow, "文生图");
-    injectPrompt(workflow, String(this.config.promptNodeId || "6"), String(this.config.promptField || "text"), request.prompt);
+    const useEdit = !!request.images?.length && String(this.config.imageEditWorkflow || "").trim().length > 0;
+    const kind = useEdit ? "图生图（参考图）" : "文生图";
+    const workflow = parseWorkflow(useEdit ? this.config.imageEditWorkflow : this.config.imageWorkflow, kind);
+    const promptNodeId = String((useEdit ? this.config.imageEditPromptNodeId : this.config.promptNodeId) || "6");
+    const promptField = String((useEdit ? this.config.imageEditPromptField : this.config.promptField) || "text");
+    injectPrompt(workflow, promptNodeId, promptField, request.prompt);
+    if (useEdit) {
+      const refIds = String(this.config.imageEditRefNodeIds || "").split(",").map(item => item.trim()).filter(Boolean);
+      if (!refIds.length) throw new Error("本次带了参考图，但设置里没填「参考图 LoadImage 节点 ID」（逗号分隔）");
+      const base = trimBase(this.config.baseUrl);
+      const uploaded = await uploadImage(this, base, request.images[0]);
+      for (const refId of refIds) {
+        const refNode = workflow[refId];
+        if (!refNode || !refNode.inputs) throw new Error(`工作流里找不到参考图节点 ${refId}`);
+        refNode.inputs.image = uploaded;
+      }
+    }
     randomizeSeeds(workflow);
     const { base, outputs } = await runWorkflow(this, workflow);
     const files = outputFiles(outputs).filter(file => mediaTypeOf(file.filename) === "image");

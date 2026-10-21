@@ -15,7 +15,7 @@ export function isLocalWorkspaceRequest(req: Request) {
 export async function resolveWorkspace(req: Request, path: string) {
   if (!isAbsolute(path)) throw Object.assign(new Error("工作目录必须是绝对路径"), { status: 400 });
   const directory = await realpath(path).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT" || err.code === "ENOTDIR") throw Object.assign(new Error("工作目录不存在，请重新选择文件夹"), { status: 404 });
+    if (err.code === "ENOENT" || err.code === "ENOTDIR") { console.log(`[workspace-miss] ${JSON.stringify(path)}`); throw Object.assign(new Error("工作目录不存在，请重新选择文件夹"), { status: 404 }); }
     throw err;
   });
   if (!(await stat(directory)).isDirectory()) throw Object.assign(new Error("工作目录不是文件夹，请重新选择"), { status: 404 });
