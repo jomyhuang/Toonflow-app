@@ -1,7 +1,8 @@
 import { $ } from "bun";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "@toonflow/file";
 import { dirname, relative, resolve } from "node:path";
 import sharedConfig from "../../electrobun.config";
+import prepareMacDmg from "../../apps/desktop/scripts/macDmg";
 
 const projectDir = resolve(import.meta.dir, "../..");
 const compatDir = import.meta.dir;
@@ -23,6 +24,7 @@ writeFileSync(resolve(generatedDir, "config.json"), JSON.stringify({
 writeFileSync(resolve(generatedDir, "electrobun.ts"), `import { Utils } from "electrobun/bun";
 export * from "electrobun/bun";
 export { default } from "electrobun/bun";
+export { default as Updater } from "../updater";
 // ACT: 1.18.1 原生退出函数固定使用退出码 0，无法转交 2.0 的退出码参数。
 const utils = { ...Utils, quit: (exitCode?: number) => { void exitCode; Utils.quit(); } };
 export { utils as Utils };
@@ -32,14 +34,15 @@ function modulePath(from: string, to: string) {
   return relative(dirname(from), to).replaceAll("\\", "/");
 }
 
-// ACT: 复制后仍从原桌面包解析工作区依赖，避免新增的动态导入被遗漏在产物中。
+// ACT: 复制后仍从原桌面包解析工作区依赖和 Express，避免依赖因源码移动而丢失。
 const sourceDir = resolve(generatedDir, "src");
 cpSync(resolve(projectDir, "apps/desktop/src"), sourceDir, { recursive: true });
 for (const target of new Bun.Glob("**/*.ts").scanSync({ cwd: sourceDir, absolute: true })) {
   const code = readFileSync(target, "utf8")
     .replace(/(["'])electrobun\/main\1/g, () => JSON.stringify(modulePath(target, resolve(generatedDir, "electrobun.ts"))))
-    .replace(/(["'])(@toonflow\/[^"']+)\1/g, (_match, _quote, specifier) => JSON.stringify(modulePath(target, Bun.resolveSync(specifier, resolve(projectDir, "apps/desktop")))));
+    .replace(/(["'])(@toonflow\/[^"']+|express)\1/g, (_match, _quote, specifier) => JSON.stringify(modulePath(target, Bun.resolveSync(specifier, resolve(projectDir, "apps/desktop")))));
   writeFileSync(target, code);
 }
 const cli = resolve(compatDir, "node_modules/electrobun/bin/electrobun.cjs");
+if (mode === "build") await prepareMacDmg();
 await $`${process.execPath} ${cli} ${mode} ${mode === "build" ? ["--env=stable"] : []}`.cwd(compatDir);

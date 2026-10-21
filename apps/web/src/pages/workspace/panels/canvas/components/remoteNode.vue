@@ -7,7 +7,7 @@
       <span class="stateLabel">error</span>
       <div class="stateActions nodrag nopan" @pointerdown.stop @mousedown.stop @dblclick.stop>
         <el-button :icon="IconRefresh" text :loading="reloading" title="重新加载节点" aria-label="重新加载节点" @click.stop="retry" />
-        <el-button :icon="IconX" text title="移除节点" aria-label="移除节点" @click.stop="removeNodes(node.id)" />
+        <el-button :icon="IconTrash" text title="移除节点" aria-label="移除节点" @click.stop="removeNodes(node.id)" />
       </div>
     </div>
     <p>{{ error || runtimeError || "远程节点未加载，请确认插件已安装并启用" }}</p>
@@ -18,7 +18,7 @@
 import { inject, onErrorCaptured, ref, watch, type Component } from "vue";
 import { useNode, useVueFlow } from "@vue-flow/core";
 import { ElButton, ElCard } from "element-plus";
-import { IconRefresh, IconX } from "@tabler/icons-vue";
+import { IconRefresh, IconTrash } from "@tabler/icons-vue";
 import { nodeSkeleton, type NodeData } from "@toonflow/nodes-scaffold/runtime";
 
 defineOptions({ inheritAttrs: false });

@@ -3,8 +3,8 @@
     <div class="itemList">
       <el-card v-for="item in sortedProviders" :key="item.id" class="providerItem" shadow="never">
         <div class="providerHeader">
-          <div v-if="isTfRouterProvider(item)" class="providerMark" aria-hidden="true">
-            <img class="providerLogo" :src="logoUrl" alt="" />
+          <div v-if="item.icon || isTfRouterProvider(item)" class="providerMark" aria-hidden="true">
+            <img class="providerLogo" :class="{ monochrome: isTfRouterProvider(item) }" :src="item.icon || logoUrl" alt="" />
           </div>
           <div class="providerInfo">
             <div class="providerHeading">
@@ -14,7 +14,7 @@
             <el-text class="providerId" size="small" type="info" :title="item.id">{{ item.id }}</el-text>
           </div>
         </div>
-        <tfAccount v-if="isTfRouterProvider(item)" :apiKey="typeof item.apiKey === 'string' ? item.apiKey : ''" :visible="visible" :modelProvider="item" :saveApiKey="(key, models) => saveProviderApiKey(item.id, key, models)" />
+        <tfAccount v-if="isTfRouterProvider(item)" :apiKey="typeof item.apiKey === 'string' ? item.apiKey : ''" :visible="visible" :saveApiKey="(key) => saveProviderApiKey(item.id, key)" />
         <div class="providerFooter">
           <div class="providerMeta">
             <el-tag v-if="getProviderVersion(item)" size="small" type="info" effect="plain">v{{ getProviderVersion(item) }}</el-tag>
@@ -89,25 +89,10 @@ async function deleteProvider(id: string) {
   finally { deletingId.value = ""; }
 }
 
-async function saveProviderApiKey(id: string, key: string, fetchedModels?: CustomProviderModel[]) {
+async function saveProviderApiKey(id: string, key: string) {
   const provider = customProviders.value.find(item => item.id === id);
   if (!provider) throw new Error("供应商已不存在");
   const { apiUrl, protocol, apiKey } = provider;
-  let models = isTfRouterProvider(provider) ? fetchedModels : provider.models;
-  if (!models) {
-    try {
-      const { data } = await axios.post("/api/providers/models", {
-        apiUrl, protocol, apiKey: key,
-      }, { timeout: 35000 });
-      if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "获取模型列表失败");
-      if (!data.data.length) throw new Error("未获取到可用模型，请检查 API Key 后重试");
-      models = data.data;
-    } catch (error) {
-      throw new Error(axios.isAxiosError(error)
-        ? error.response?.data?.message || "获取模型列表失败，请检查 API Key 后重试"
-        : error instanceof Error ? error.message : "获取模型列表失败");
-    }
-  }
   await saveSettings(settings => {
     const current = settings.customProviders;
     if (!Array.isArray(current)) throw new Error("配置格式错误");
@@ -116,15 +101,35 @@ async function saveProviderApiKey(id: string, key: string, fetchedModels?: Custo
     if (latest.apiUrl !== apiUrl || latest.protocol !== protocol || latest.apiKey !== apiKey) {
       throw new Error("供应商配置已变更，请重试");
     }
-    return { customProviders: current.map(item => item?.id === id ? { ...item, apiKey: key, models } : item) };
+    return { customProviders: current.map(item => item?.id === id ? { ...item, apiKey: key } : item) };
   });
 }
 
 async function fetchProviderModels(provider: CustomProvider) {
   if (fetchingId.value) return;
-  fetchingId.value = provider.id;
-  try { await saveProviderApiKey(provider.id, provider.apiKey); }
-  catch (error) { ElMessage.error(error instanceof Error ? error.message : "获取模型列表失败，请重试"); }
+  const { id, apiUrl, protocol, apiKey } = provider;
+  fetchingId.value = id;
+  try {
+    const { data } = await axios.post("/api/providers/models", { apiUrl, protocol, apiKey }, { timeout: 35000 });
+    if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "获取模型列表失败");
+    if (!data.data.length) throw new Error("未获取到可用模型，请检查 API Key 后重试");
+    await saveSettings(settings => {
+      const current = settings.customProviders;
+      if (!Array.isArray(current)) throw new Error("配置格式错误");
+      const latest = current.find(item => item?.id === id);
+      if (!latest) throw new Error("供应商已不存在");
+      if (latest.apiUrl !== apiUrl || latest.protocol !== protocol || latest.apiKey !== apiKey) {
+        throw new Error("供应商配置已变更，请重试");
+      }
+      const models = (data.data as CustomProviderModel[]).map(model => {
+        const saved = (latest.models as CustomProviderModel[]).find(item => item.id === model.id);
+        return saved?.reasoningEfforts === undefined ? model : { ...model, reasoningEfforts: saved.reasoningEfforts };
+      });
+      return { customProviders: current.map(item => item?.id === id ? { ...item, models } : item) };
+    });
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || "获取模型列表失败，请重试" : error instanceof Error ? error.message : "获取模型列表失败，请重试");
+  }
   finally { fetchingId.value = ""; }
 }
 </script>

@@ -1,5 +1,6 @@
 <template>
   <main class="hello" :class="{ configuring: view !== 'welcome' }">
+    <div class="pageLanguage"><languageSelect popover /></div>
     <section class="welcomePanel" aria-labelledby="welcomeTitle">
       <div v-if="view !== 'welcome'" class="providerContent">
         <header class="providerHeader">
@@ -33,6 +34,7 @@
           <icon-login class="buttonIcon" />
           登录 TF-Router 自动配置
         </el-button>
+        <el-button class="mobileConnectButton" :type="deviceHubEnabled ? 'success' : undefined" :plain="deviceHubEnabled" :icon="deviceHubEnabled || mobileConnection.mode === 'remote' ? IconDeviceDesktop : IconQrcode" @click="mobileConnectVisible = true">{{ mobileConnectionLabel }}</el-button>
         <div class="secondaryActions">
           <el-button class="secondaryButton" round @click="view = 'custom'">
             <icon-key class="buttonIcon" />
@@ -54,6 +56,7 @@
         <span class="artName">Toonflow</span>
       </div>
     </div>
+    <mobileConnect v-model="mobileConnectVisible" />
   </main>
 </template>
 
@@ -62,18 +65,22 @@ import axios from "axios";
 import { defineAsyncComponent, onMounted, onBeforeUnmount, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { IconArrowLeft } from "@tabler/icons-vue";
+import { IconArrowLeft, IconQrcode, IconDeviceDesktop } from "@tabler/icons-vue";
 import tfRouter from "@toonflow/providers/language/tfRouter";
 import tfRouterSource from "@toonflow/providers/media/tfRouter?raw";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
-import { customProviders, saveSettings, type CustomProviderModel } from "@/stores/settings";
+import { customProviders, saveSettings } from "@/stores/settings";
 import type { MediaProvider } from "@/components/settings/panels/mediaModel/types";
 import { useHelloStore } from "@/stores/hello";
 import anonymousData from "@/lib/anonymousData";
 import logoSvg from "@toonflow/assets/logo.svg?raw";
 import bg from "./bg.vue";
+import languageSelect from "@/components/languageSelect.vue";
+import { deviceHubEnabled, mobileConnection, mobileConnectionLabel } from "@/lib/mobile";
 
 const languageModel = defineAsyncComponent(() => import("@/components/settings/panels/languageModel/index.vue"));
+const mobileConnect = defineAsyncComponent(() => import("@/components/mobileConnect.vue"));
+const mobileConnectVisible = ref(false);
 const view = ref<"welcome" | "login" | "custom">("welcome");
 const loginUrl = ref("https://api.toonflow.net/login?type=toonflow");
 const loginOrigin = new URL(loginUrl.value).origin;
@@ -141,20 +148,7 @@ async function configureProviders() {
   const request = new AbortController();
   loginRequest = request;
   try {
-    const [modelsResponse, mediaResponse] = await Promise.all([
-      axios.post<{ code: number; data: CustomProviderModel[] }>(
-        "/api/providers/models",
-        {
-          apiUrl: tfRouter.apiUrl,
-          protocol: tfRouter.protocol,
-          apiKey,
-        },
-        { signal: request.signal, timeout: 35000 }
-      ),
-      axios.get<{ code: number; data: MediaProvider[] }>("/api/providers/media/list", { signal: request.signal }),
-    ]);
-    const models = modelsResponse.data.data;
-    if (modelsResponse.data.code !== 200 || !Array.isArray(models) || !models.length) throw new Error("未获取到文本模型，请重试配置");
+    const mediaResponse = await axios.get<{ code: number; data: MediaProvider[] }>("/api/providers/media/list", { signal: request.signal });
     if (mediaResponse.data.code !== 200 || !Array.isArray(mediaResponse.data.data)) throw new Error("读取媒体供应商失败，请重试配置");
     request.signal.throwIfAborted();
     if (!mediaResponse.data.data.some((provider) => provider.id === tfRouter.id)) {
@@ -176,10 +170,11 @@ async function configureProviders() {
         ...previous,
         id: previous?.id ?? tfRouter.id,
         label: previous?.label ?? tfRouter.label,
+        icon: previous?.icon ?? tfRouter.icon,
         apiUrl: tfRouter.apiUrl,
         protocol: tfRouter.protocol,
         apiKey,
-        models: previous?.models?.length ? previous.models : models,
+        models: previous?.models ?? [],
       };
       return {
         customProviders: index < 0 ? [...providers, provider] : providers.map((item, position) => position === index ? provider : item),
@@ -191,7 +186,7 @@ async function configureProviders() {
     await hello.complete();
     anonymousData.track("onboarding.complete");
     loginKey.value = "";
-    ElMessage.success("文本模型和媒体模型已配置完成");
+    ElMessage.success("TF-Router API Key 已配置完成");
     await router.replace("/home");
   } catch (error) {
     if (!request.signal.aborted)
@@ -224,6 +219,14 @@ onBeforeUnmount(() => {
   background: var(--el-bg-color);
   color: var(--el-text-color-primary);
   font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  .pageLanguage {
+    position: fixed;
+    top: 16px;
+    inset-inline-end: calc(50% + 8px);
+    z-index: 2;
+    max-width: calc(50% - 24px);
+  }
 
   .welcomePanel {
     display: grid;
@@ -305,12 +308,15 @@ onBeforeUnmount(() => {
       .buttonIcon {
         width: 18px;
         height: 18px;
-        margin-right: 8px;
+        margin-inline-end: 8px;
       }
 
       .loginButton {
         width: 100%;
-        height: 50px;
+        height: auto;
+        min-height: 50px;
+        padding: 12px;
+        white-space: normal;
         border-radius: calc(var(--ui-radius) * 1.625);
         font-size: 16px;
         font-weight: 600;
@@ -330,12 +336,16 @@ onBeforeUnmount(() => {
         }
 
         .secondaryButton {
-          height: 36px;
+          height: auto;
+          min-height: 36px;
           margin: 0;
-          padding: 0 16px;
+          padding: 8px 16px;
+          white-space: normal;
           font-size: 13px;
         }
       }
+
+      .mobileConnectButton { width: 100%; margin: 12px 0 0; min-height: 42px; }
     }
 
     .pageFooter {
@@ -417,6 +427,11 @@ onBeforeUnmount(() => {
 
   @media (max-width: 700px) {
     grid-template-columns: 1fr;
+
+    .pageLanguage {
+      inset-inline-end: 16px;
+      max-width: calc(100% - 32px);
+    }
 
     .welcomePanel {
       padding: 32px 20px;

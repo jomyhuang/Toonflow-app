@@ -25,9 +25,13 @@ export function useMentionSources(getDirectory: () => string | undefined) {
 
   return {
     currentCanvasId: () => getCanvasSource?.()?.currentCanvasId() ?? "",
-    async canvases() {
-      const canvases = getCanvasSource?.()?.canvases();
-      return canvases?.length ? canvases : request<{ id: string; name: string }[]>("canvases");
+    async canvases(signal?: AbortSignal) {
+      signal?.throwIfAborted();
+      const directory = getDirectory();
+      const canvases = await getCanvasSource?.()?.canvases(signal);
+      signal?.throwIfAborted();
+      if (directory !== getDirectory()) throw new Error("工作区已切换，请重新选择");
+      return canvases ?? request<{ id: string; name: string }[]>("canvases", {}, signal);
     },
     async nodes({ canvasId, ...options }: MentionQuery & { canvasId: string }) {
       options.signal?.throwIfAborted();

@@ -1,6 +1,6 @@
 # 节点脚手架
 
-`@toonflow/nodes-scaffold` 提供共享 Vite 配置和节点骨架组件。每个 `packages/nodes/*` 目录是一个独立 Bun workspace，自行维护依赖、Vue 子组件和构建插件。
+`@toonflow/nodes-scaffold` 提供共享 Vite 配置、节点骨架与宿主接口。节点插件在 `packages/nodes/*` 中各自维护依赖、Vue 子组件和构建入口；跨插件共享源码位于 `packages/nodeShared`，作为独立包 `@toonflow/node-shared`，不单独构建节点。
 
 ```text
 packages/nodeScaffold/
@@ -9,9 +9,10 @@ packages/nodeScaffold/
   src/useNode.ts           当前节点状态、端口、输出、事件和文件能力
   src/nodeSkeleton.vue     共用标题栏、内容 Card 和左右连接点
   src/values.ts            固定输出结构与类型校验
-  src/nodeInputs.ts             按目标节点、输入端口读取上游值
+  src/nodeInputs.ts        按目标节点、输入端口读取上游值
   src/nodeEvent.ts         统一注册节点输入、输出、删除和连接校验事件
   src/workspaceFiles.ts    使用宿主文件能力、上传节点文件
+packages/nodeShared/       跨插件共享组件与业务逻辑，独立包 @toonflow/node-shared
 packages/nodes/imageNode/
   package.json             当前节点自己的依赖
   vite.config.ts           引用共享配置
@@ -23,25 +24,47 @@ data/nodes/
   imageNode.umd.js          开发时同步，供 server 加载
 ```
 
-在 `src/components/` 中封装子组件、在其它目录放工具函数，正常 import 即可；它们不会单独生成节点入口。
+在节点自身的 `src/components/` 中封装子组件、在其它目录放工具函数，正常 import 即可；它们不会单独生成节点入口。
 
-节点运行时代码统一从 `@toonflow/nodes-scaffold/runtime` 导入组件、组合式函数、类型和工具。根入口 `@toonflow/nodes-scaffold` 仅供 Vite 配置导入 `createNodeConfig`，不要在浏览器组件中引用；旧的运行时子路径仍兼容。
+`packages/nodeScaffold` 仅提供通用节点基础能力、构建配置与宿主接口，运行时能力从 `@toonflow/nodes-scaffold/runtime` 导入。插件专属组件、交互、提示词、预设与业务逻辑放在所属插件中，通过其公开导出复用；跨插件共享组件与业务逻辑统一放在 `packages/nodeShared`，通过独立包 `@toonflow/node-shared` 的公开子路径导入，不混入脚手架。根入口 `@toonflow/nodes-scaffold` 仅供 Vite 配置导入 `createNodeConfig`，不要在浏览器组件中引用。
 
-## 共享提示词与参考列表
+## 共享 Markdown 编辑依赖
 
-多种节点共用的提示词输入与参考列表放在脚手架中，节点之间不互相依赖。按组件子路径导入，仅使用时才打包对应依赖：
+Tiptap、marked 和 DOMPurify 通过构建配置的 external 复用宿主依赖。编辑器、预览组件、工具栏和生命周期由各扩展或节点在自己的包内实现，不导入宿主组件，也没有组件转发层。子包使用这些依赖时声明与宿主兼容的 peerDependencies：当前 Tiptap 各包为 `3.31.3`，`marked` 为 `18.0.13`，`dompurify` 为 `3.4.16`。
+
+直接使用依赖原有 API：
 
 ```ts
-import promptInput from "@toonflow/nodes-scaffold/promptInput";
-import referenceItem from "@toonflow/nodes-scaffold/referenceItem";
-import { useNodeReferences } from "@toonflow/nodes-scaffold/runtime";
+import { Editor } from "@tiptap/core";
+import { StarterKit } from "@tiptap/starter-kit";
+import { Markdown } from "@tiptap/markdown";
+
+const editor = new Editor({
+  extensions: [StarterKit, Markdown],
+  content: "# 标题",
+  contentType: "markdown",
+});
+```
+
+共享模块包括 `@tiptap/core`、`@tiptap/vue-3`、`@tiptap/starter-kit`、`@tiptap/markdown`，以及 `extension-find-and-replace`、`extension-highlight`、`extension-image`、`extension-list`、`extension-subscript`、`extension-superscript`、`extension-table`、`extension-text-align`（均为 `@tiptap/` 前缀）；还包括 `@tiptap/pm/model`、`@tiptap/pm/state`、`@tiptap/pm/view`、`marked` 和 `dompurify`。构建产物引用 `window.toonflowTiptapHost` 中对应的依赖，不重复打包这些实现。
+
+Tiptap 统一使用具名导入，例如 `{ StarterKit }`、`{ Image }`、`{ Highlight }`、`{ Superscript }`、`{ Subscript }`、`{ TextAlign }`、`{ FindAndReplace }`。当前 Vite 8 UMD 的默认导入会取整个外部模块对象，不能用于这些共享模块；DOMPurify 单独共享默认函数，继续使用 `import DOMPurify from "dompurify"`。无需启用影响所有依赖的旧版 CJS 兼容开关。
+
+宿主先检查 UMD 是否引用 `toonflowTiptapHost`，仅在需要时动态加载共享依赖，后续复用同一个 ES 模块；普通图片、视频或纯文本插件不会因此预载 Tiptap。组件的挂载、销毁、隐藏状态、正文更新和文件保存仍由各包管理。使用共享依赖的产物需要配套宿主版本。
+
+## 插件侧业务复用
+
+提示词输入、参考列表、生成历史、生成状态和错误解释放在 `packages/nodeShared`。调用节点声明 `@toonflow/node-shared` workspace 依赖并按子路径导入：
+
+```ts
+import promptInput from "@toonflow/node-shared/promptInput";
+import referenceItem from "@toonflow/node-shared/referenceItem";
+import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
 
 const { refList, referenceMentions, setReferencePreview, removeReference } = useNodeReferences("in");
 ```
 
-`promptInput` 使用 `v-model` 保存富文本结构、`v-model:text` 读取纯文本，`references` 接收包含 `id`、`name`、`value` 和可选 `avatar` 的参考项。`referenceItem` 使用 `v-model` 绑定 `NodeInputValue[]`，通过 `preview` 返回预览地址、`remove` 通知节点断开对应连线。Vue、VueFlow 和 Element Plus 仍复用宿主实例。
-
-`useNodeReferences(handleId = "in")` 统一管理对应输入端口的参考顺序、预览和删除连线。将 `refList` 绑定到 `referenceItem`，`preview`、`remove` 分别绑定 `setReferencePreview`、`removeReference`，并把 `referenceMentions` 传给 `promptInput`。拖拽顺序按来源节点与端口 ID 保存到 `node.data.referenceOrder[handleId]`，上游输出与预览不重复保存；重载恢复相同顺序，已插入的引用通过稳定 ID 跟随原对象更新编号。
+图片编辑、宫格切分、局部重绘和打光从 `@toonflow/node-image` 的对应子路径导入；视频播放器从 `@toonflow/node-video/videoPlayer` 导入。共享源码随使用方节点打包，Vue、VueFlow 和 Element Plus 继续复用宿主实例。
 
 ## 节点骨架
 
@@ -61,7 +84,7 @@ const { refList, referenceMentions, setReferencePreview, removeReference } = use
 </template>
 
 <script setup lang="ts">
-import { ElInput as elInput } from "element-plus";
+import { ElInput } from "element-plus";
 import { nodeSkeleton, useNode, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 
 defineOptions({
@@ -75,7 +98,7 @@ const { nodeProps, outputs } = useNode({
 </script>
 ```
 
-`useNode(options?)` 接受 `label`、`icon`、`handles`、`outputs`，返回 `id`、`node`、`config`、`nodeProps`、`handles`、`outputs`、`nodeEvent`、`nodeTools`、`files`、`ai`、`ffmpeg`、`updateNodeInternals`。`nodeProps` 是供骨架绑定的 computed，包含标题、图标、端口和输出；`outputs` 根据默认值推导类型，并恢复当前节点保存的合法输出，只接受仍存在的 source 端口及匹配类型。文本默认值保持 `STRING`；图片节点无已保存输出时保持为空。
+`useNode(options?)` 接受 `label`、`icon`、`handles`、`outputs`，返回 `id`、`node`、`config`、`nodeProps`、`handles`、`outputs`、`nodeEvent`、`nodeTools`、`files`、`ai`、`ffmpeg`、`asr`、`updateNodeInternals`。`nodeProps` 是供骨架绑定的 computed，包含标题、图标、端口和输出；`outputs` 根据默认值推导类型，并恢复当前节点保存的合法输出，只接受仍存在的 source 端口及匹配类型。文本默认值保持 `STRING`；图片节点无已保存输出时保持为空。
 
 `files.uploadFile(file)`、`files.removeNodeFiles()` 和 `updateNodeInternals()` 已绑定当前节点，无需再次传 ID；`files` 同时提供 `getWorkspaceFiles()`、`useFileUrl()`。端口定义、具体 UI、上传校验和上传/删除互斥仍由业务节点管理。选中状态可直接使用 `node.selected`，例如绑定 `v-model:bottomVisible="node.selected"`。
 
@@ -118,6 +141,12 @@ async function compose(signal?: AbortSignal) {
 节点卸载、传入 signal 取消或 `command.kill()` 会取消请求并终止转换；开始前取消也会阻止随后启动的 FFmpeg 继续执行。FFprobe/能力查询的原生库未暴露子进程，取消仅停止等待查询结果。缺少 FFmpeg 时复用设置中的下载提示，不自动安装或重试。
 
 显式输入输出与截图路径沿用宿主的工作区、符号链接检查；原始参数、滤镜和媒体清单中的间接 I/O 仍仅供可信节点使用，**不是文件系统沙箱**。服务端原生 API 参见 `packages/toolScaffold/readme.md`。
+
+### 音频转文本
+
+在组件 setup 中取得 `const { asr } = useNode()`，再调用 `await asr.transcribe("assets/audio.wav", { lang: "zh-CN", signal })`，返回识别全文。也可以单独从 runtime 或 `@toonflow/nodes-scaffold/nodeAsr` 导入 `useNodeAsr()`；麦克风 API `createBrowserAsr` 及支持检测同时公开导出。
+
+输入为当前工作区内的音频路径，非空且不超过 100 MB；读取时固定本次工作区，节点卸载或传入的 signal 取消会终止识别并释放音频资源。底层复用 `@toonflow/asr` 的浏览器音轨识别，按音频原速处理；不支持的宿主或识别服务错误直接抛出，不回退到麦克风。API 存在不代表实际 WebView 的识别服务可用，需要目标安装包验证。
 
 ### AI 模型调用
 
@@ -162,7 +191,7 @@ await ai.generate({
 - `ai.generateImage(input, signal?)`：非流式生成并落盘，返回 `{ path, mimeType, mediaType: "image" }[]`。`input` 包含工作区绝对路径 `directory`、`providerId`、`modelId`、`prompt`、工作区相对目录 `outputDirectory`；可传 `images: { path, mimeType }[]`、`ratio`、`size`。图片参考只传工作区相对路径，由后端读取。
 - `ai.generateVideo(input, signal?)`：视频生成并落盘，返回 `{ path, mimeType, mediaType: "video" }[]`。基础字段同图片生成；使用 `duration`、`resolution`、`ratio`、`generateAudio`、`mode` 配置视频，可传 `images`、`videos`、`audios` 和 `firstFrame`、`lastFrame`，素材均为工作区内 `{ path, mimeType }` 引用。
 
-`directory` 在生成前通过 `files.getWorkspaceFiles().list()` 取得快照，`outputDirectory` 使用 `assets/${id}`。结果可直接赋给 `outputs.value.image = { dataType: "IMAGE", value: { url: result.path, mimeType: result.mimeType } }`；使用 `files.useFileUrl` 预览。图片生成节点会合并文本参考、传入图片参考，成功后替换输出，失败或停止时保留上次图片；删除节点前取消请求，并清理其文件目录。
+`directory` 在生成前通过 `files.getWorkspaceFiles().list()` 取得快照，`outputDirectory` 使用 `assets/${id}`。结果可直接赋给 `outputs.value.image = { dataType: "IMAGE", value: { url: result.path, mimeType: result.mimeType } }`；使用 `files.useFileUrl` 预览。图片生成节点会合并文本参考、传入图片参考，成功后替换输出，失败或停止时保留上次图片；删除节点前取消请求。当前画布为支持撤销而保留节点素材，不随节点删除物理文件。
 
 ### Agent 节点函数
 
@@ -281,7 +310,7 @@ nodeEvent.on("delete", async () => {
 });
 ```
 
-图片节点使用 `files.removeNodeFiles()` 清理工作区 `assets/<nodeId>/`，目录不存在视为已清理。上传期间拒绝删除，清理期间禁用上传。仅删除该节点自己的目录，不根据输出 URL 删除其它节点的文件。当前复制节点仍共享原图片路径，删除原节点的目录也会影响副本引用。
+图片节点在删除回调中调用 `files.removeNodeFiles()`。当前画布通过 `retainNodeFiles` 保留素材以支持撤销，该方法不会物理删除文件；未启用保留策略的宿主会清理工作区 `assets/<nodeId>/`，目录不存在视为已清理。上传期间拒绝删除，清理期间禁用上传。清理仅作用于该节点自己的目录，不根据输出 URL 删除其它节点的文件；复制节点仍可能共享原图片路径，宿主启用物理清理前须考虑这些引用。
 
 ## 输出值与读取工具
 
@@ -294,7 +323,7 @@ const { outputs } = useNode({
   handles: [{ id: "image", type: "source", dataType: "IMAGE" }],
 });
 // 在节点的实际加载或生成逻辑完成后赋值。
-outputs.value.image = { dataType: "IMAGE", value: { url: "/files/example.png", mimeType: "image/png" } };
+outputs.value.image = { dataType: "IMAGE", value: { url: "assets/example.png", mimeType: "image/png" } };
 ```
 
 首批输出协议如下。媒体使用文件引用，不是 ComfyUI 后端的 Python 张量；不进行数据转换。
@@ -407,9 +436,9 @@ server 从 `data/nodes` 提供节点列表 `/api/nodes/get`，并通过 `/api/no
 
 ## 新增节点
 
-1. 参考 `packages/nodes/imageNode` 在 `packages/nodes/textNode` 创建源码与配置，按新节点需求编写内容，修改 `package.json` 的包名，例如 `@toonflow/node-text`，并把 `vite.config.ts` 的节点名改为 `textNode`。
+1. 参考 `packages/nodes/imageNode`，在尚不存在的目录（例如 `packages/nodes/exampleNode`）创建源码与配置，按新节点需求编写内容，修改 `package.json` 的包名，例如 `@toonflow/node-example`，并把 `vite.config.ts` 的节点名改为 `exampleNode`。
 2. 修改 `src/index.vue`，在这个子包的 `dependencies` 中声明自己使用的 UI 框架和第三方库。需要 Sass 或其它构建插件时，加入该子包的 `devDependencies`。
-3. 根目录运行 `bun install` 和 `bun run dev:plugins`，得到 `build/nodes/textNode.umd.js` 并同步到 `data/nodes/textNode.umd.js`；启动 `bun run dev` 或刷新已打开的首页即可加载，浏览器导出为 `window.toonflowNodes.textNode`。仅生成发布产物使用 `bun run build:nodes`。
+3. 根目录运行 `bun install` 和 `bun run dev:plugins`，得到 `build/nodes/exampleNode.umd.js` 并同步到 `data/nodes/exampleNode.umd.js`；启动 `bun run dev` 或刷新已打开的首页即可加载，浏览器导出为 `window.toonflowNodes.exampleNode`。仅生成发布产物使用 `bun run build:nodes`。
 
 节点名必须唯一且使用小驼峰；显式指定名字可避免 Windows 工具链路径大小写变化影响导出名。各包的 Vite 配置只需：
 
@@ -417,8 +446,8 @@ server 从 `data/nodes` 提供节点列表 `/api/nodes/get`，并通过 `/api/no
 import { createNodeConfig } from "@toonflow/nodes-scaffold";
 
 export default createNodeConfig({
-  name: "textNode",
-  displayName: "文本节点",
+  name: "exampleNode",
+  displayName: "示例节点",
   author: "", // 填写作者名称
   github: "", // 填写作者或项目的 https://github.com/... 地址
 }, import.meta.url);
@@ -430,7 +459,7 @@ export default createNodeConfig({
 
 构建会把三个展示字段、`version`、`readme` 和 `configRules` 写入 UMD 第一行的 `/*! toonflowNode:{JSON} */` 注释，无需额外清单文件。server 只解析这段 JSON，不执行节点代码，并通过 `/api/nodes/get` 返回元数据。设置中的已安装列表显示插件名称、版本和作者，名称末尾的小图标用于打开 GitHub；没有元数据的旧 UMD 继续显示节点标识，缺少版本时接口返回空字符串。修改配置或版本并开发同步后，重新打开市场即可刷新。
 
-需要额外 alias、插件等配置时，在该节点的 `vite.config.ts` 中用 Vite 的 `mergeConfig` 合并。保持共享配置中的 UMD 格式、输出目录和 Vue/VueFlow/Element Plus external 设置。
+需要额外 alias、插件等配置时，在该节点的 `vite.config.ts` 中用 Vite 的 `mergeConfig` 合并。保持共享配置中的 UMD 格式、输出目录和所有共享依赖的 external/globals 设置。
 
 ### 节点插件配置
 
@@ -465,7 +494,8 @@ const apiKey = computed(() => String(config.value.apiKey ?? ""));
 ## 依赖和样式边界
 
 - `vue` 和 `@vue-flow/core` 是节点的 peer dependency，UMD 直接使用宿主提供的 `window.toonflowNodeHost.vue`、`.vueFlow`；节点内不创建 Vue app，`useVueFlow()` 继承所在画布。
-- `element-plus` 同样声明为 peer dependency，复用 `window.toonflowNodeHost.elementPlus`。组件从根入口按需导入，例如 `import { ElButton as elButton } from "element-plus"`；不要导入 `element-plus/es/...` 或其 CSS。宿主统一加载 Element Plus 组件与样式，节点产物不重复打包。
+- `element-plus` 同样声明为 peer dependency，复用 `window.toonflowNodeHost.elementPlus`。组件从根入口按需导入，例如 `import { ElButton } from "element-plus"`，模板使用 `<el-button>`；不要导入 `element-plus/es/...` 或其 CSS。宿主统一加载 Element Plus 组件与样式，节点产物不重复打包。
+- `three` 核心通过 external 复用 `window.toonflowNodeHost.three`，宿主提供完整 API。节点继续声明与宿主一致的 `three` 版本（当前 `0.184.0`），正常使用 `import { WebGLRenderer, Vector3 } from "three"`，无需直接访问全局对象。`three/addons/*`、`three/examples/jsm/*` 扩展仍按需打入节点，扩展内部的 `three` 引用同样复用宿主核心；不要从 `three/src/*` 深层导入核心。节点 UMD 与宿主需要使用配套版本。
 - 文本 AI 使用的 Pi SDK 同样通过现有 external 机制复用 `window.toonflowNodeHost.ai`，包含 `runAgentLoop` 和 `createAssistantMessageEventStream`；不在各节点 UMD 中重复打包，不新增运行时或服务。节点 UMD、宿主与后端需要使用配套版本。
 - 第三方库直接引用 `@vue/runtime-core` 或 `@vue/runtime-dom` 时，也使用宿主的 Vue 导出。各节点的 Vue/VueFlow 版本必须与宿主兼容；不要引入自行内嵌 Vue 的库或直接导入 Vue 的 `dist` 产物。
 - 其它依赖随各节点独立打包；不同节点可以使用不同 UI 框架和第三方库版本，同一个库也可能重复出现在不同 UMD 中。

@@ -8,6 +8,10 @@
     :style="{ width: previewUrl && videoWidth ? `${videoWidth + 18}px` : undefined }"
     @fullscreen="player?.enterFullscreen()">
     <template #topActions>
+      <el-button :icon="IconMusic" text :disabled="!outputFile || uploading || exporting || actions?.processing" @click.stop="actions?.open('extractAudio')">提取音轨</el-button>
+      <el-button :icon="IconLayersSubtract" text :disabled="!outputFile || uploading || exporting || actions?.processing" @click.stop="actions?.open('separate')">分离音视频</el-button>
+      <el-button :icon="IconScissors" text :disabled="!outputFile || uploading || exporting || actions?.processing" @click.stop="actions?.open('trim')">截取片段</el-button>
+      <el-button :icon="IconMovie" text :loading="actions?.creatingAnalysis" :disabled="!outputFile || uploading || exporting || actions?.processing || actions?.creatingAnalysis" @click.stop="actions?.createFrameAnalysis()">逐帧拉片</el-button>
       <el-button
         :icon="IconTransfer"
         :loading="uploading"
@@ -15,7 +19,19 @@
         text
         title="替换视频"
         aria-label="替换视频"
-        @click.stop="fileInput?.click()" />
+        @click.stop="fileInput?.click()">替换视频</el-button>
+    </template>
+    <template #topRightActions>
+      <el-dropdown trigger="click" placement="bottom-end" :disabled="!player?.ready || player?.capturing || uploading || exporting" @command="player?.captureFrame($event)">
+        <el-button :icon="IconPhotoScan" :loading="player?.capturing" :disabled="!player?.ready || player?.capturing || uploading || exporting" text title="截取视频帧" aria-label="截取视频帧" />
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="current" :icon="IconPhotoScan">截取当前帧</el-dropdown-item>
+            <el-dropdown-item command="first" :icon="IconPlayerSkipBack">截取首帧</el-dropdown-item>
+            <el-dropdown-item command="last" :icon="IconPlayerSkipForward">截取尾帧</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </template>
     <div class="videoContent nopan">
       <div v-if="exporting" class="exportLoading" role="status" aria-label="视频导出中">
@@ -41,14 +57,16 @@
       </el-button>
     </div>
   </nodeSkeleton>
+  <videoActions ref="actions" :file="outputFile" :src="previewUrl" :disabled="uploading || exporting" />
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { IconVideo, IconUpload, IconTransfer } from "@tabler/icons-vue";
-import { ElButton, ElMessage, ElProgress } from "element-plus";
+import { IconVideo, IconUpload, IconTransfer, IconMusic, IconLayersSubtract, IconScissors, IconMovie, IconPhotoScan, IconPlayerSkipBack, IconPlayerSkipForward } from "@tabler/icons-vue";
+import { ElButton, ElMessage, ElProgress, ElDropdown, ElDropdownMenu, ElDropdownItem } from "element-plus";
 import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
-import videoPlayer from "@toonflow/nodes-scaffold/videoPlayer";
+import videoPlayer from "./components/videoPlayer.vue";
+import videoActions from "./components/videoActions.vue";
 
 defineOptions({
   inheritAttrs: false,
@@ -61,6 +79,7 @@ const { node, nodeProps, outputs, nodeEvent, files, updateNodeInternals } = useN
 const fileInput = ref<HTMLInputElement>();
 const uploading = ref(false);
 const player = ref<InstanceType<typeof videoPlayer>>();
+const actions = ref<InstanceType<typeof videoActions>>();
 const exportProgress = computed(() => (node.data as typeof node.data & { exportProgress?: number }).exportProgress);
 const exporting = computed(() => typeof exportProgress.value === "number");
 const videoWidth = ref(0);

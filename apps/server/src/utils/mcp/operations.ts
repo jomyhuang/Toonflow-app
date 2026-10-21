@@ -1,7 +1,8 @@
+import { getLocale, t, validationOptions } from "@/lib/i18n";
 import { z } from "zod";
 import { toolNameSchema } from "@toonflow/tools-scaffold/runtime";
 import { mediaModelsSchema, mediaProviderFileSchema } from "@/utils/media/provider";
-import { getMcpRuntime } from "@/utils/mcp/runtime";
+import { getAppRequestHeaders, getMcpRuntime } from "@/utils/mcp/runtime";
 
 const maxBytes = 20 * 1024 * 1024;
 const directory = z.string().min(1).max(4096);
@@ -109,7 +110,7 @@ export const appOperations: {
     parameters: z.strictObject({ fileName: mediaProviderFileSchema, revision }), refresh: { type: "provider", nameField: "fileName" },
   },
   {
-    name: "listAssets", description: "列出全局素材库的文件和文件夹树；与工作区 asstes 目录不同。", method: "GET", path: "/api/assets/list", parameters: z.strictObject({}),
+    name: "listAssets", description: "列出全局素材库的文件和文件夹树；与工作区 assets 目录不同。", method: "GET", path: "/api/assets/list", parameters: z.strictObject({}),
   },
   {
     name: "createAssetDirectory", description: "在全局素材库创建文件夹，path 为素材库内相对路径。", method: "POST", path: "/api/assets/mkdir", parameters: z.strictObject({ path }),
@@ -142,12 +143,12 @@ export const appOperations: {
 
 export async function runAppOperation(name: string, parameters: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
   const operation = appOperations.find(item => item.name === name);
-  if (!operation) throw new Error(`未知应用操作：${name}`);
-  const args = operation.parameters.parse(parameters) as Record<string, unknown>;
+  if (!operation) throw new Error(t`未知应用操作：${name}`);
+  const args = operation.parameters.parse(parameters, validationOptions()) as Record<string, unknown>;
   const origin = getMcpRuntime().appOrigin;
   if (!origin) throw new Error("Toonflow 服务尚未就绪");
   const url = new URL(operation.path, origin);
-  const headers: Record<string, string> = { "x-toonflow-workspace": "1", Origin: origin, Referer: `${origin}/` };
+  const headers: Record<string, string> = { ...getAppRequestHeaders(), "x-toonflow-workspace": "1", Origin: origin, Referer: `${origin}/`, "Accept-Language": getLocale() };
   let body: string | ArrayBuffer | undefined;
   if (operation.name === "saveAsset") {
     url.searchParams.set("path", args.path as string);
@@ -174,6 +175,6 @@ export async function runAppOperation(name: string, parameters: Record<string, u
     return { path: args.path, mimeType: response.headers.get("content-type"), base64: bytes.toString("base64") };
   }
   const result = await response.json() as { code?: number; data?: unknown; message?: string };
-  if (!response.ok || result.code !== 200) throw new Error(result.message || `应用操作失败（${response.status}）`);
+  if (!response.ok || result.code !== 200) throw new Error(result.message || t`应用操作失败（${response.status}）`);
   return result.data ?? null;
 }

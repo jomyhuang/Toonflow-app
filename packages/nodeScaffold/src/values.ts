@@ -9,6 +9,7 @@ export type NodeValueMap = {
   MASK: NodeMediaValue;
   VIDEO: NodeMediaValue;
   AUDIO: NodeMediaValue;
+  FILE: NodeMediaValue;
 };
 
 export type NodeOutput = {
@@ -29,11 +30,13 @@ export function isNodeOutput(output: unknown): output is NodeOutput {
     case "IMAGE":
     case "MASK":
     case "VIDEO":
-    case "AUDIO": {
+    case "AUDIO":
+    case "FILE": {
       const mediaType = dataType === "MASK" ? "image" : dataType.toLowerCase();
       return !!value && typeof value === "object" && "url" in value && typeof value.url === "string" && !!value.url.trim()
-        && "mimeType" in value && typeof value.mimeType === "string" && value.mimeType.startsWith(`${mediaType}/`)
-        && value.mimeType.length > mediaType.length + 1;
+        && "mimeType" in value && typeof value.mimeType === "string"
+        && (dataType === "FILE" ? /^[^/\s]+\/[^/\s]+$/.test(value.mimeType)
+          : value.mimeType.startsWith(`${mediaType}/`) && value.mimeType.length > mediaType.length + 1);
     }
     default: return false;
   }

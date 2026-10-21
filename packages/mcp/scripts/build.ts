@@ -1,4 +1,4 @@
-import { cp, mkdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, writeFile } from "@toonflow/file";
 import { resolve } from "node:path";
 
 const packageRoot = resolve(import.meta.dir, "..");

@@ -3,11 +3,12 @@ import { watch } from "vue";
 import router from "@/router";
 import { customProviders, privacySettings, settings } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { isDesktop } from "./platform";
 
 type UsageEvent = "onboarding.complete" | "onboarding.skip" | "workspace.canvas" | "workspace.document";
 type AgentOutcome = "success" | "failed" | "cancelled";
 type CanvasSnapshot = { nodes: readonly { type?: string }[]; edgeCount: number };
-const nodeTypes = ["textNode", "imageNode", "videoNode", "audioNode", "imageGenerationNode", "videoGenerationNode", "director3dNode", "canvasGroup"];
+const nodeTypes = ["textNode", "imageNode", "videoNode", "audioNode", "imageGenerationNode", "videoGenerationNode", "audioGenerationNode", "director3dNode", "canvasGroup"];
 let readCanvas: (() => CanvasSnapshot | undefined) | undefined;
 let collector: { track: (event: UsageEvent) => void; startAgent: () => (outcome: AgentOutcome) => void } | undefined;
 
@@ -128,7 +129,7 @@ export function registerAnonymousData() {
       visibleDurationSeconds: Math.floor(visibleElapsed / 1000),
       activeDurationSeconds: Math.floor(activeElapsed / 1000),
       activitySamples,
-      app: { version: import.meta.env.appVersion, desktop: new URLSearchParams(window.location.search).get("desktop") === "1" },
+      app: { version: import.meta.env.appVersion, desktop: isDesktop },
       environment: { platform: navigator.platform, browser, language: navigator.language },
       usage: {
         projectCount: workspace.projectList.length,

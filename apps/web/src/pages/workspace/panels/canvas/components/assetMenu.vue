@@ -24,6 +24,7 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from "@toonflow/i18n/vue";
 import { computed, nextTick, ref, shallowRef } from "vue";
 import axios from "axios";
 import saveFile from "@/lib/saveFile";
@@ -46,7 +47,7 @@ const moveFolders = computed(() => {
       ...flatten(item.children ?? []),
     ]);
   }
-  return [{ label: "素材库根目录", path: "." }, ...flatten(props.entries)];
+  return [{ label: translate("素材库根目录"), path: "." }, ...flatten(props.entries)];
 });
 
 function destinationDisabled(path: string) {

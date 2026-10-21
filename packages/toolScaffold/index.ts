@@ -1,4 +1,5 @@
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "@toonflow/file";
+import { file, write } from "@toonflow/file/bun";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
@@ -110,7 +111,7 @@ export async function createToolConfig(config: Omit<ToolMetadata, "components" |
       name: "inlineDshVersion",
       setup(build) {
         build.onLoad({ filter: /[\\/]@deepseek-ai[\\/]dsh-llm[\\/]lib[\\/]index\.js$/ }, async ({ path }) => {
-          const source = await Bun.file(path).text();
+          const source = await file(path).text();
           // ACT: DSH 0.1.5-rc.2 动态读取自身 package.json；改成静态读取供 Bun 内联版本信息。
           const contents = source.replace("createRequire(import.meta.url)(\"../package.json\")", "require(\"../package.json\")");
           return { contents, loader: "js" };
@@ -129,7 +130,7 @@ export async function createToolConfig(config: Omit<ToolMetadata, "components" |
   if (!result.success) throw new AggregateError(result.logs, `工具构建失败：${metadata.name}`);
   // Bun 会把 @bun 标记放在 banner 前，构建完成后再写入首行元数据。
   const builtPath = resolve(outDir, fileName);
-  await Bun.write(builtPath, `/*! toonflowTool:${metadataJson} */\n${clientBanner}${await result.outputs[0].text()}`);
+  await write(builtPath, `/*! toonflowTool:${metadataJson} */\n${clientBanner}${await result.outputs[0].text()}`);
   if (process.env.NODE_ENV === "dev") {
     await mkdir(dataDir, { recursive: true });
     // ACT: Windows 的 bun --watch 占用已加载模块，开发同步直接复制覆盖，不使用 rename。

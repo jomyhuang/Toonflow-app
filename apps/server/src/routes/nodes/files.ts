@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { lstat } from "node:fs/promises";
+import { lstat } from "@toonflow/file";
+import { sendFile } from "@/utils/fileHttp";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import u from "@/utils";
@@ -22,5 +23,6 @@ export default router.get("/", validateFields({ name: z.string().regex(/^[a-z][a
     throw err;
   });
   if (disabled) return res.status(404).json(error("节点已禁用", null, 404));
-  res.set("Cache-Control", "no-cache").sendFile(filePath);
+  res.set("Cache-Control", "no-cache");
+  await sendFile(res, filePath);
 });

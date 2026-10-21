@@ -67,12 +67,12 @@ export async function createBrowserFfmpeg(directory: string, signal?: AbortSigna
       const transport = new AbortController();
       let finished = false;
       let ready = false;
-      let cancelling = false;
+      let cancellation: Promise<void> | undefined;
       const cancel = () => {
-        if (!ready || finished || cancelling) return;
-        cancelling = true;
+        if (!ready || finished || cancellation) return;
         // Bun 不总是把 fetch.abort 传递给 Express；显式取消，并等响应头保证任务已注册。
-        void request({ ...input, options: {}, calls: [], operation: { method: "cancel", args: [] } }, AbortSignal.timeout(5000))
+        cancellation = request({ ...input, options: {}, calls: [], operation: { method: "cancel", args: [] } })
+          .then(() => {})
           .catch(error => console.error("FFmpeg 取消请求失败", error))
           .finally(() => transport.abort(requestSignal.reason));
       };
@@ -108,7 +108,9 @@ export async function createBrowserFfmpeg(directory: string, signal?: AbortSigna
           await reader.cancel().catch(() => {});
           reader.releaseLock();
         }
-      })().catch(error => {
+      })().catch(async error => {
+        // 事件流可能先收到心跳或断开；取消握手完成前不让调用方清理仍在使用的文件。
+        if (requestSignal.aborted) await cancellation;
         if (active === controller) active = undefined;
         if (finished) queueMicrotask(() => { throw error; });
         else if (callback) callback(error);

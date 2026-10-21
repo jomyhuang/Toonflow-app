@@ -1,6 +1,6 @@
 <template>
   <div v-click-outside:[editor]="closeMenu" class="skillMenu" @keydown.capture="handleKeydown">
-    <el-button class="skillButton" text circle :disabled="disabled" :aria-expanded="visible" :aria-controls="listId" aria-label="选择技能" title="选择技能" @click="visible ? closeMenu() : buttonVisible = true"><icon-book :size="15" /></el-button>
+    <el-button class="skillButton" text circle :disabled="disabled" :aria-expanded="visible" :aria-controls="listId" aria-label="选择技能" title="选择技能" @click="visible ? closeMenu() : buttonVisible = true"><icon-book :size="16" /></el-button>
     <el-card v-if="visible" class="skillPopup" shadow="always" :bodyStyle="{ padding: '6px' }">
       <el-scrollbar maxHeight="260px">
         <div :id="listId" role="listbox" aria-label="技能指令" :aria-busy="loading">

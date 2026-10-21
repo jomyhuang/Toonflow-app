@@ -19,7 +19,7 @@
       <el-popover v-if="subAgents?.length" v-model:visible="subAgentsVisible" trigger="click" placement="bottom-end" :width="340" :showArrow="false" :popperStyle="{ maxWidth: 'calc(100vw - 24px)' }">
         <template #reference>
           <el-button class="subAgentTrigger" text circle :aria-label="`子 Agent，共 ${subAgents.length} 个`" :aria-expanded="subAgentsVisible" title="子 Agent">
-            <icon-users-group :size="17" />
+            <icon-users-group :size="16" />
             <span class="subAgentCount" aria-hidden="true">{{ subAgents.length }}</span>
           </el-button>
         </template>
@@ -44,10 +44,10 @@
           </ul>
         </div>
       </el-popover>
-      <el-button v-if="!parentFile" text circle aria-label="新建对话" title="新建对话" @click="emit('newChat')"><icon-message-plus :size="17" /></el-button>
+      <el-button v-if="!parentFile" text circle aria-label="新建对话" title="新建对话" @click="emit('newChat')"><icon-message-plus :size="16" /></el-button>
       <el-popover v-if="!parentFile" v-model:visible="historyVisible" trigger="click" placement="bottom-end" :width="280" :showArrow="false" @show="emit('history')">
         <template #reference>
-          <el-button text circle :loading="loading" :icon="IconHistory" aria-label="历史对话" title="历史对话" />
+          <el-button text circle :loading="loading" :icon="IconHistory" :aria-expanded="historyVisible" aria-label="历史对话" title="历史对话" />
         </template>
         <div class="historyList" role="group" aria-label="历史对话">
           <p v-if="!history.length" class="historyTips" role="status">{{ loading ? "正在加载对话…" : "暂无历史对话，点击“新建对话”开始。" }}</p>
@@ -70,14 +70,14 @@
               <icon-pencil :size="14" />
             </el-button>
             <el-button v-if="history.length > 1" class="historyAction" text circle :aria-label="`移除历史对话 ${item.name}`" title="移除历史对话" @click.stop="emit('remove', item.file)">
-              <icon-x :size="14" />
+              <icon-trash :size="14" />
             </el-button>
           </div>
         </div>
       </el-popover>
       <el-button text circle :loading="configLoading" :icon="IconAdjustmentsHorizontal" aria-label="媒体生成控制" title="媒体生成控制" @click="openMediaConfig" />
       <slot name="actions" />
-      <el-button text circle aria-label="关闭对话" title="关闭" @click="emit('close')"><icon-x :size="17" /></el-button>
+      <el-button text circle aria-label="关闭对话" title="关闭" @click="emit('close')"><icon-x :size="16" /></el-button>
     </div>
   </header>
   <pluginConfigDialog v-if="mediaTool" v-model="configVisible" :plugin="mediaTool" :canManage="canManageTools" />
@@ -93,7 +93,7 @@ import pluginConfigDialog from "@/components/settings/panels/pluginMarket/plugin
 import type { Plugin } from "@/components/settings/panels/pluginMarket/types";
 import {
   IconMessagePlus, IconHistory,
-  IconX, IconPencil,
+  IconX, IconPencil, IconTrash,
   IconMessageCircle, IconCheck, IconAdjustmentsHorizontal,
   IconArrowLeft, IconUsersGroup,
 } from "@tabler/icons-vue";
@@ -198,6 +198,7 @@ async function renameHistory(item: AgentHistory) {
     margin: 0;
     padding: 0;
     color: var(--el-text-color-secondary);
+    :deep(.el-icon) { font-size: 16px; }
   }
 
   .conversationName {
@@ -249,6 +250,7 @@ async function renameHistory(item: AgentHistory) {
       margin: 0;
       padding: 0;
       color: var(--el-text-color-secondary);
+      .el-icon { font-size: 16px; }
     }
   }
 }

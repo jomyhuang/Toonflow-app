@@ -30,15 +30,17 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from "@toonflow/i18n/vue";
+
 import { privacySettings, settings } from "@/stores/settings";
 
 const metrics = [
-  { label: "使用与回访", description: "随机匿名标识、访问次数与时间" },
-  { label: "使用活跃", description: "使用时长和交互次数，不含输入内容" },
-  { label: "运行环境", description: "软件版本、桌面或网页端、系统、浏览器和语言" },
-  { label: "功能使用", description: "引导、画布与文档的使用情况" },
-  { label: "使用规模", description: "项目、模型配置、节点与连线数量，以及节点类型" },
-  { label: "Agent 使用", description: "发送次数、完成情况和耗时" },
+  { get label() { return translate("使用与回访"); }, get description() { return translate("随机匿名标识、访问次数与时间"); } },
+  { get label() { return translate("使用活跃"); }, get description() { return translate("使用时长和交互次数，不含输入内容"); } },
+  { get label() { return translate("运行环境"); }, get description() { return translate("软件版本、桌面或网页端、系统、浏览器和语言"); } },
+  { get label() { return translate("功能使用"); }, get description() { return translate("引导、画布与文档的使用情况"); } },
+  { get label() { return translate("使用规模"); }, get description() { return translate("项目、模型配置、节点与连线数量，以及节点类型"); } },
+  { get label() { return translate("Agent 使用"); }, get description() { return translate("发送次数、完成情况和耗时"); } },
 ];
 </script>
 

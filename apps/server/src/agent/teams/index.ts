@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 import { join } from "node:path";
 import { z } from "zod";
 import { SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -25,7 +26,7 @@ export async function createTeamRunner(options: SubAgentModel & {
 }) {
   const { name, cwd, tools, canvas, ...modelOptions } = options;
   const { directory, manifest, files, enabled } = await readTeam(name);
-  if (!enabled) throw new Error(`团队 ${name} 已禁用`);
+  if (!enabled) throw new Error(t`团队 ${name} 已禁用`);
   const hostTools = tools.filter(tool => !["subAgent", "report", "askUser", "delegate", "teamResources", "requestInput"].includes(tool.name));
   const privatePlugins = await Promise.all(Object.entries(manifest.tools ?? {}).map(async ([pluginName, config]) => {
     const { plugin, metadata } = await loadTool(pluginName, join(directory, "tools"));
@@ -39,13 +40,13 @@ export async function createTeamRunner(options: SubAgentModel & {
       const definitions = await plugin.createTools(createAgentToolContext(cwd, config, canvas));
       for (const tool of definitions) {
         if (!tool.name || typeof tool.execute !== "function" || ["subAgent", "askUser", "delegate", "teamResources", "requestInput"].includes(tool.name) || available.has(tool.name)) {
-          throw new Error(`团队私有工具无效或名称重复：${tool.name}`);
+          throw new Error(t`团队私有工具无效或名称重复：${tool.name}`);
         }
         available.set(tool.name, { ...tool, promptGuidelines: [...(metadata.prompt ? [metadata.prompt] : []), ...(tool.promptGuidelines ?? [])] });
       }
     }
     for (const toolName of member.tools ?? []) {
-      if (!available.has(toolName)) throw new Error(`成员 ${memberName} 配置的工具当前不可用：${toolName}`);
+      if (!available.has(toolName)) throw new Error(t`成员 ${memberName} 配置的工具当前不可用：${toolName}`);
     }
     memberTools.set(memberName, [...available.values()].filter(tool => !member.tools || member.tools.includes(tool.name)));
     instructions.set(memberName, new TextDecoder("utf-8", { fatal: true }).decode(files.get(member.instructions)));

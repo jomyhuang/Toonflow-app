@@ -1,4 +1,5 @@
 import type { AgentMention } from "./runtime/types";
+import { getDocumentMimeType, getTextMimeType } from "../lib/documentFormats";
 
 export type MentionNode = { id: string; name: string; outputCount: number; available: boolean; dataType?: string; thumbnail?: { url: string; mimeType: string } };
 export type MentionOutput = { id: string; name: string; dataType: string; preview: string; available: boolean; thumbnail?: { url: string; mimeType: string } };
@@ -8,7 +9,7 @@ export type MentionCanvasNode = { id: string; type?: string; label?: unknown; da
 export type MentionQuery = { query?: string; cursor?: string; limit?: number; signal?: AbortSignal };
 export type MentionCanvasSource = {
   currentCanvasId(): string;
-  canvases(): { id: string; name: string }[];
+  canvases(signal?: AbortSignal): Promise<{ id: string; name: string }[]>;
   nodes(canvasId: string, options: MentionQuery): Promise<MentionPage<MentionNode>> | undefined;
   outputs(canvasId: string, nodeId: string): MentionOutput[] | undefined;
   selectCanvas(canvasId: string, nodeId: string, outputId: string): Promise<AgentMention> | undefined;
@@ -38,7 +39,7 @@ export function mentionOutputValue(node: MentionCanvasNode, outputId: string) {
       || (dataType === "FLOAT" && typeof value === "number" && Number.isFinite(value))) {
       return { dataType, value };
     }
-    if (["IMAGE", "MASK", "VIDEO", "AUDIO"].includes(String(dataType)) && mentionRecord(value)
+    if (["IMAGE", "MASK", "VIDEO", "AUDIO", "FILE"].includes(String(dataType)) && mentionRecord(value)
       && typeof value.url === "string" && value.url.trim() && typeof value.mimeType === "string") {
       return { dataType: String(dataType), value: { url: value.url, mimeType: value.mimeType } };
     }
@@ -123,12 +124,15 @@ export async function createCanvasMention(node: MentionCanvasNode, canvasId: str
 }
 
 export function mentionAssetType(path: string) {
+  const documentMimeType = getDocumentMimeType(path);
+  if (documentMimeType) return { mimeType: documentMimeType, dataType: "FILE" };
+  const textMimeType = getTextMimeType(path);
+  if (textMimeType) return { mimeType: textMimeType, dataType: "STRING" };
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   const types: Record<string, string> = {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", avif: "image/avif", apng: "image/apng", bmp: "image/bmp", svg: "image/svg+xml", ico: "image/x-icon",
     mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mov: "video/quicktime", mkv: "video/x-matroska", avi: "video/x-msvideo", ogv: "video/ogg",
     mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", opus: "audio/ogg", flac: "audio/flac", m4a: "audio/mp4", aac: "audio/aac",
-    txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv", log: "text/plain", json: "application/json", xml: "application/xml", html: "text/html", css: "text/css", js: "text/javascript", ndjson: "application/x-ndjson",
   };
   const mimeType = types[extension] ?? "application/octet-stream";
   const dataType = !types[extension] ? "FILE" : mimeType.startsWith("image/") ? "IMAGE" : mimeType.startsWith("video/") ? "VIDEO" : mimeType.startsWith("audio/") ? "AUDIO" : "STRING";

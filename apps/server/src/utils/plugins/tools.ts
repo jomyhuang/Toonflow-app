@@ -1,5 +1,6 @@
+import { t, translateMessage, validationOptions } from "@/lib/i18n";
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir } from "@toonflow/file";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as zod from "zod";
@@ -48,7 +49,7 @@ function parseToolClient(source: string) {
 }
 
 export async function readTool(name: string, directory = toolsDirectory) {
-  toolNameSchema.parse(name);
+  toolNameSchema.parse(name, validationOptions());
   const path = resolve(directory, `${name}.tool.js`);
   const file = await lstat(path);
   if (!file.isFile()) throw Object.assign(new Error("工具文件无效"), { status: 400 });
@@ -79,7 +80,7 @@ export async function listTools() {
         const { metadata, revision } = await readTool(name);
         return { ...metadata, enabled, config: getToolConfig(metadata), revision, loadError: "" };
       } catch (err) {
-        const loadError = err instanceof Error ? err.message : "工具文件无法读取";
+        const loadError = translateMessage(err instanceof Error ? err.message : "工具文件无法读取");
         return { name, version: "", displayName: name, description: loadError, author: "", github: "", components: [], configRules: [], enabled, config: {}, revision: "", loadError };
       }
     }));
@@ -90,7 +91,7 @@ export async function loadTool(name: string, directory = toolsDirectory) {
   // ACT: 工具是可信的服务端代码，不是沙箱；安装成功后由安装器清除模块缓存。
   const { default: plugin } = await import(pathToFileURL(path).href) as { default: ToolPlugin };
   if (typeof plugin?.createTools !== "function" || typeof plugin.validateConfig !== "function") {
-    throw Object.assign(new Error(`${metadata.displayName} 未导出有效的工具插件`), { status: 400 });
+    throw Object.assign(new Error(t`${metadata.displayName} 未导出有效的工具插件`), { status: 400 });
   }
   return { plugin, metadata };
 }
@@ -99,6 +100,6 @@ export function validateToolConfig(plugin: ToolPlugin, config: Record<string, un
   try {
     return plugin.validateConfig(config);
   } catch (err) {
-    throw Object.assign(new Error(err instanceof Error ? err.message : "工具配置无效"), { status: 400 });
+    throw Object.assign(err instanceof Error ? err : new Error("工具配置无效"), { status: 400 });
   }
 }

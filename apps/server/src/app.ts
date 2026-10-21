@@ -1,29 +1,38 @@
 import logger from "morgan";
 import express from "express";
 import cors from "cors";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { readFile, readdir } from "@toonflow/file";
 import type { Request, Response, NextFunction } from "express";
 import buildRoute from "@/core";
-import { error } from "@/lib/responseFormat";
+import { errorFromCause } from "@/lib/responseFormat";
 import desktopRequest from "@/lib/desktop";
+import { getRuntimePlatform } from "@/lib/platform";
 import initializePlugins from "@/utils/plugins/initialize";
+import { languageRequest, resolveRequestLocale, runWithLocale, setLocaleFallback, translateError, translateMessage } from "@/lib/i18n";
+import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 
-const autoInstallProviders = ["tfRouter.ts", "apiMart.ts", "meta.ts"];
+const autoInstallProviders = ["tfRouter.ts", "apiMart.ts", "metaso.ts", "compshare.ts"];
 
 export async function createApp({
   webRoot,
+  appVersion = "",
   dataDirectory,
   toolsRoot,
   nodesRoot,
+  extRoot,
   providersRoot,
   skillsRoot,
   agentsRoot,
   pluginRevision,
 }: {
   webRoot: string;
+  appVersion?: string;
   dataDirectory?: string;
   toolsRoot?: string;
   nodesRoot?: string;
+  extRoot?: string;
   providersRoot?: string;
   skillsRoot?: string;
   agentsRoot?: string;
@@ -31,21 +40,58 @@ export async function createApp({
 }) {
   // conf 由下方的路由动态加载，必须先确定整个进程共用的数据目录。
   if (dataDirectory) process.env.TOONFLOW_DATA_DIR = resolve(dataDirectory);
+  const { default: conf } = await import("@/utils/conf");
+  setLocaleFallback(() => normalizeLocale((conf.get("settings", {}).ui as { language?: unknown } | undefined)?.language)
+    ?? detectLocale([Intl.DateTimeFormat().resolvedOptions().locale]));
   if (dataDirectory && toolsRoot)
     await initializePlugins(resolve(dataDirectory, "tools"), toolsRoot, /^[a-z][a-zA-Z0-9]*\.tool\.js$/, pluginRevision);
   if (dataDirectory && nodesRoot) await initializePlugins(resolve(dataDirectory, "nodes"), nodesRoot, /^[a-z][a-zA-Z0-9]*\.umd\.js$/, pluginRevision);
-  // ACT: 供应方和技能可由用户编辑，只补首次安装，不随应用版本覆盖。
-  if (dataDirectory && providersRoot)
-    await initializePlugins(resolve(dataDirectory, "providers"), resolve(providersRoot, "media"), autoInstallProviders);
+  if (dataDirectory && extRoot) {
+    const { default: initializeExt } = await import("@/utils/plugins/initializeExt");
+    await initializeExt(resolve(dataDirectory, "ext"), extRoot, pluginRevision);
+  }
+  // ACT: 内置媒体供应商随构建同步，其他供应商文件和独立保存的配置保留。
+  if (dataDirectory && providersRoot) {
+    const sourceDirectory = resolve(providersRoot, "media");
+    let providerRevision = pluginRevision;
+    if (providerRevision === undefined) {
+      const hash = createHash("sha256");
+      for (const name of autoInstallProviders) {
+        const source = await readFile(resolve(sourceDirectory, name)).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return Buffer.alloc(0);
+          throw error;
+        });
+        hash.update(name).update("\0").update(source).update("\0");
+      }
+      providerRevision = hash.digest("hex");
+    }
+    await initializePlugins(resolve(dataDirectory, "providers"), sourceDirectory, autoInstallProviders, providerRevision);
+  }
+  // ACT: 技能和团队只补首次安装，保留用户修改。
   if (dataDirectory && skillsRoot) await initializePlugins(resolve(dataDirectory, "skills"), skillsRoot);
   if (dataDirectory && agentsRoot) await initializePlugins(resolve(dataDirectory, "agents"), agentsRoot);
   const app = express();
+  app.locals.appVersion = appVersion;
+  // ACT: 内置身份取自当前发行包的目录，不依赖作者或安装记录；更新后的同名插件仍属于内置插件。
+  app.locals.builtinPlugins = Object.fromEntries(await Promise.all(
+    Object.entries({ tool: toolsRoot, node: nodesRoot, ext: extRoot, skill: skillsRoot, agent: agentsRoot }).map(async ([type, root]) => {
+      const entries = root ? await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      }) : [];
+      const pattern = type === "tool" ? /^[a-z][a-zA-Z0-9]*\.tool\.js$/ : type === "ext" ? /^ext-[a-z][a-zA-Z0-9]*\.umd\.js$/ : /^[a-z][a-zA-Z0-9]*\.umd\.js$/;
+      const names = entries.filter(entry => type === "skill" || type === "agent" ? entry.isDirectory() : entry.isFile() && pattern.test(entry.name))
+        .map(entry => entry.isDirectory() ? entry.name : entry.name.replace(/\.(?:tool|umd)\.js$/, ""));
+      return [type, new Set(names)];
+    }),
+  ));
 
-  if (process.env.NODE_ENV === "dev") {
+  if (getRuntimePlatform().development) {
     await buildRoute();
     app.use(logger("dev"));
   }
   app.use(cors());
+  app.use(languageRequest);
   app.use("/a2a", express.json({ limit: "2mb" }));
   app.use(["/api/workspaces/files/write", "/api/assets/save"], express.raw({ type: "application/octet-stream", limit: "100mb" }));
   app.use(express.json({ limit: "100mb" }));
@@ -53,7 +99,8 @@ export async function createApp({
   app.use("/api/desktop", desktopRequest);
 
   const { default: initializeProviderModels } = await import("@/utils/ai/initialize");
-  await initializeProviderModels();
+  // ACT: 启动先使用已有模型，远程刷新不阻塞服务监听。
+  void initializeProviderModels().catch(error => console.warn("启动时刷新供应商模型失败：", error));
   const router = await import("@/router");
   router.default(app);
   const [{ createMcpRouter }, { getMcpTools }, { authorizeMcp }, { skillResources }] = await Promise.all([
@@ -62,7 +109,11 @@ export async function createApp({
     import("@/utils/mcp/control"),
     import("@/utils/mcp/resources"),
   ]);
-  app.use("/mcp", createMcpRouter({ getTools: getMcpTools, authorize: authorizeMcp, resources: skillResources }));
+  app.use("/mcp", createMcpRouter({ getTools: getMcpTools, authorize: authorizeMcp, resources: skillResources,
+    runInRequest: (request, operation) => runWithLocale(resolveRequestLocale(request.get("accept-language")), operation),
+    translate: translateMessage,
+    translateError,
+  }));
   const { createA2aRouter } = await import("@/agent/a2a");
   app.use("/a2a", createA2aRouter());
   app.use(express.static(webRoot));
@@ -71,20 +122,11 @@ export async function createApp({
   app.use((err: Error & { status?: number }, request: Request, response: Response, next: NextFunction) => {
     if (response.headersSent) return next(err);
     console.error(err);
-    const code = (err as NodeJS.ErrnoException).code;
-    const status = err.status || ({ ENOENT: 404, ENOTDIR: 404, EEXIST: 409, ENOTEMPTY: 409, EACCES: 403, EPERM: 403 }[code ?? ""] ?? 500);
-    const message =
-      {
-        ENOENT: "找不到这个文件或文件夹，可能已被移动、删除，或者位置选错了。",
-        ENOTDIR: "你选中的是文件，但这里需要选择文件夹。请重新选择。",
-        EEXIST: "这个名称已经被占用了，请换一个名称。原来的内容不会被覆盖。",
-        ENOTEMPTY: "这个文件夹里还有内容，不能直接删除。请先清空或移走里面的文件。",
-        EACCES: "没有权限访问这个文件或文件夹。请检查权限，或换一个位置重试。",
-        EPERM: "系统不允许这次操作。文件可能正在被其他程序使用，请关闭后重试。",
-        EISDIR: "你选中的是文件夹，但这里需要的是文件。请重新选择具体文件。",
-      }[code ?? ""] ?? err.message;
-    response.status(status).json(error(message, code ? { code } : null, status));
+    const body = errorFromCause(err);
+    response.status(body.code).json(body);
   });
 
+  const { initializeMobileLinkRuntime } = await import("@/utils/mobileLink");
+  initializeMobileLinkRuntime(app);
   return app;
 }

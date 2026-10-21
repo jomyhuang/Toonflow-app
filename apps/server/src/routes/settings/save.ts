@@ -4,11 +4,14 @@ import { z } from "zod";
 import { validateFields } from "@/lib/middleware";
 import { success } from "@/lib/responseFormat";
 import { maxSystemPromptLength } from "@/agent/runtime/prompt";
+import { t } from "@/lib/i18n";
+import { providerSchema } from "@/utils/ai";
 
 const router = Router();
 
 export default router.put("/", validateFields({ settings: z.record(z.string(), z.json()).and(z.object({
-  agentSystemPrompt: z.string().max(maxSystemPromptLength, `系统提示词不能超过 ${maxSystemPromptLength} 个字符`).optional(),
+  agentSystemPrompt: z.string().max(maxSystemPromptLength, { error: () => t`系统提示词不能超过 ${maxSystemPromptLength} 个字符` }).optional(),
+  customProviders: z.array(providerSchema.extend({ id: z.string().min(1), label: z.string() })).optional(),
   desktopUpdateSource: z.enum(["official", "github", "custom"]).optional(),
   desktopUpdateCustomUrl: z.string().max(2048).refine(value => !value || u.desktop.isValidUpdateUrl(value),
     "自定义更新源必须是不含账号、查询参数或锚点的 HTTP(S) 地址").optional(),
@@ -19,7 +22,9 @@ export default router.put("/", validateFields({ settings: z.record(z.string(), z
   u.mcpControl.assertAppRequest(req);
   const { settings } = req.body;
   u.removeLegacySettings(settings);
+  u.cleanNodeMenuSettings(settings);
+  const previousSettings = u.conf.get("settings", {});
   u.conf.set("settings", settings);
-  await u.mcpRuntime.reloadMcpRuntime();
-  res.json(success(null, "设置已保存"));
+  const [models] = await Promise.all([u.ai.refreshProviderModels(previousSettings), u.mcpRuntime.reloadMcpRuntime()]);
+  res.json(success({ ...models, aiModels: u.ai.listAiModels(), nodeMenu: u.conf.get("settings.general.nodeMenu") ?? null }, "设置已保存"));
 });

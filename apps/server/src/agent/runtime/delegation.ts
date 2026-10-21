@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile } from "@toonflow/file";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext } from "@toonflow/tools-scaffold/runtime";
 import type { AgentEvent } from "@/agent/runtime/types";
@@ -8,10 +8,12 @@ import { addUsage, emptyUsage, type SubAgentResult } from "@/agent/runtime/subAg
 import { createCanvasContext } from "@/agent/bridge/canvas";
 import { createQuestionContext } from "@/agent/bridge/question";
 import { resolveWorkspacePath } from "@/utils/workspace/files";
+import { translateError, translateMessage } from "@/lib/i18n";
+import type { ThinkingLevel } from "@/lib/modelReasoning";
 
 export async function runDelegatedAgent(options: {
   cwd: string; parentFile: string; name: string; task: string;
-  providerId: string; modelId: string; thinkingLevel: "off" | "low" | "medium" | "high";
+  providerId: string; modelId: string; thinkingLevel?: ThinkingLevel;
   canvas?: CanvasContext; signal?: AbortSignal; send: (event: AgentEvent) => void; onProgress?: (text: string) => void;
 }) {
   const { cwd, parentFile, name, task, providerId, modelId, thinkingLevel, canvas, signal, onProgress } = options;
@@ -33,7 +35,7 @@ export async function runDelegatedAgent(options: {
     result.status = childSignal.aborted ? "cancelled" : "completed";
   } catch (error) {
     result.status = childSignal.aborted ? "cancelled" : (error as { code?: string })?.code === "AGENT_LENGTH" ? "limited" : "error";
-    result.result = error instanceof Error ? error.message : "子任务执行失败";
+    result.result = error instanceof Error ? translateError(error) : translateMessage("子任务执行失败");
     if (result.status !== "limited") await updateSubAgent(cwd, parentFile, { ...agent, status: result.status, result: result.result });
     send({ type: "error", message: result.result });
   } finally {

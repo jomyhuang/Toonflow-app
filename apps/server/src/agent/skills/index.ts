@@ -1,14 +1,15 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { t } from "@/lib/i18n";
+import { existsSync, mkdir, readFile, realpath, stat } from "@toonflow/file";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { loadSkills, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SkillContext, SkillLocation, SkillScope } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
+import { directory, isEnabled } from "@/utils/skills/files";
 import { isWithin, lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
 
 export function loadAgentSkills(cwd: string, scope?: SkillScope) {
   if (scope !== undefined && scope !== "workspace" && scope !== "global") throw new Error("技能范围无效");
-  return loadSkills({
+  const result = loadSkills({
     cwd,
     agentDir: join(cwd, ".agent"),
     includeDefaults: false,
@@ -18,6 +19,8 @@ export function loadAgentSkills(cwd: string, scope?: SkillScope) {
       ...(scope !== "workspace" ? [join(dirname(conf.path), "skills")] : []),
     ].filter(existsSync),
   });
+  result.skills = result.skills.filter(skill => !isWithin(directory(), skill.filePath) || isEnabled(skill.name));
+  return result;
 }
 
 export function createSkillContext(cwd: string): SkillContext {
@@ -26,7 +29,7 @@ export function createSkillContext(cwd: string): SkillContext {
   async function locate(request: SkillLocation, create = false) {
     const scope = create ? request.scope ?? "workspace" : request.scope;
     const skill = loadAgentSkills(cwd, scope).skills.find(skill => skill.name === request.name);
-    if (!skill && !create) throw new Error(`技能不存在：${request.name}`);
+    if (!skill && !create) throw new Error(t`技能不存在：${request.name}`);
     if (!skill && (request.name.length > 64 || !/^[a-z][a-zA-Z0-9]*$/.test(request.name))) throw new Error("新技能名称必须为不超过 64 字符的小驼峰");
     const targetScope = scope ?? skillScope(skill!.filePath);
     const root = await realpath(targetScope === "workspace" ? cwd : dirname(conf.path));

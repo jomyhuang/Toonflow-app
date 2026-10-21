@@ -1,5 +1,5 @@
 diff --git a/dist/vue-flow-core.js b/dist/vue-flow-core.js
-index c8213e0..8f4f88c 100644
+index c8213e0..3cc6c59 100644
 --- a/dist/vue-flow-core.js
 +++ b/dist/vue-flow-core.js
 @@ -4739,6 +4739,7 @@ function updateEdgeAction(edge, newConnection, prevEdge, shouldReplaceId, trigge
@@ -22,8 +22,17 @@ index c8213e0..8f4f88c 100644
      if (node.parentNode && !parentNode) {
        triggerError(new VueFlowError(ErrorCode.NODE_MISSING_PARENT, node.id, node.parentNode));
      }
+@@ -8288,6 +8290,8 @@ const _sfc_main$a = /* @__PURE__ */ vue.defineComponent({
+       selectionStarted = true;
+       selectionInProgress = false;
+       removeSelectedElements();
++      selectedNodeIds.value = new Set();
++      selectedEdgeIds.value = new Set();
+       userSelectionRect.value = {
+         width: 0,
+         height: 0,
 diff --git a/dist/vue-flow-core.mjs b/dist/vue-flow-core.mjs
-index 96b8e8d..6443145 100644
+index 96b8e8d..4f1ce5d 100644
 --- a/dist/vue-flow-core.mjs
 +++ b/dist/vue-flow-core.mjs
 @@ -4737,6 +4737,7 @@ function updateEdgeAction(edge, newConnection, prevEdge, shouldReplaceId, trigge
@@ -46,3 +55,12 @@ index 96b8e8d..6443145 100644
      if (node.parentNode && !parentNode) {
        triggerError(new VueFlowError(ErrorCode.NODE_MISSING_PARENT, node.id, node.parentNode));
      }
+@@ -8286,6 +8288,8 @@ const _sfc_main$a = /* @__PURE__ */ defineComponent({
+       selectionStarted = true;
+       selectionInProgress = false;
+       removeSelectedElements();
++      selectedNodeIds.value = new Set();
++      selectedEdgeIds.value = new Set();
+       userSelectionRect.value = {
+         width: 0,
+         height: 0,

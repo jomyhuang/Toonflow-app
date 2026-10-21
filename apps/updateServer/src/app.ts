@@ -1,6 +1,6 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { lstatSync } from "node:fs";
+import { lstatSync, withFileAccess } from "@toonflow/file";
 import { join, resolve } from "node:path";
 import { error } from "@/lib/responseFormat";
 
@@ -16,7 +16,7 @@ export function createApp(publicDirectory: string) {
     next();
   });
 
-  app.use((req, res, next) => {
+  app.use(async (req, res) => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.set("Allow", "GET, HEAD").status(405).end();
       return;
@@ -28,9 +28,22 @@ export function createApp(publicDirectory: string) {
       res.status(404).end();
       return;
     }
-    res.sendFile(filePath, { cacheControl: false, lastModified: false, etag: false }, err => {
-      if (err) next(err);
-    });
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    // Bun 在响应头发出前断开只触发请求 aborted，不能只监听响应 close。
+    req.once("aborted", cancel);
+    res.once("close", cancel);
+    try {
+      await withFileAccess([filePath], "read", () => new Promise<void>((resolve, reject) => {
+        if (req.aborted || res.destroyed) return resolve();
+        res.sendFile(filePath, { cacheControl: false, lastModified: false, etag: false }, err => err ? reject(err) : resolve());
+      }), controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted && !req.aborted && !res.destroyed) throw error;
+    } finally {
+      req.off("aborted", cancel);
+      res.off("close", cancel);
+    }
   });
 
   app.use((err: Error & { status?: number; code?: string }, req: Request, res: Response, next: NextFunction) => {

@@ -1,867 +1,699 @@
 <template>
-  <section class="documentPanel" aria-label="文档编辑" @keydown.ctrl.f.prevent="searchVisible = true" @keydown.meta.f.prevent="searchVisible = true">
-    <fileTree :directory="workspaceStore.project?.directory" @selectNode="openNode" />
-    <div v-loading="opening" class="editorSurface">
-      <div v-if="selectedNode" class="documentHeader">
-        <span class="documentName" :title="`${selectedPath} / ${selectedNode.label}`">{{ selectedNode.label }}</span>
-        <el-select
-          v-if="nodeOutputs.length > 1"
-          :modelValue="outputId"
-          class="outputSelect"
-          size="small"
-          aria-label="文本输出"
-          :disabled="opening"
-          @change="openOutput">
-          <el-option v-for="output in nodeOutputs" :key="output.id" :label="output.label" :value="output.id" />
-        </el-select>
-        <el-button v-if="saveError" text type="danger" size="small" :title="saveError" @click="flushSave().catch(() => {})">保存失败，重试</el-button>
-        <span v-else class="saveStatus" role="status">{{ dirty ? "保存中…" : "已保存" }}</span>
-      </div>
-      <div v-if="editor" class="editorToolbar" role="group" aria-label="文档格式">
-        <div class="toolbarGroup">
-          <el-button
-            class="toolButton"
-            text
-            size="small"
-            :disabled="!editor.can().undo()"
-            aria-label="撤销"
-            title="撤销"
-            @mousedown.prevent
-            @click="editor.chain().focus().undo().run()">
-            <icon-arrow-back-up :size="17" />
-          </el-button>
-          <el-button
-            class="toolButton"
-            text
-            size="small"
-            :disabled="!editor.can().redo()"
-            aria-label="重做"
-            title="重做"
-            @mousedown.prevent
-            @click="editor.chain().focus().redo().run()">
-            <icon-arrow-forward-up :size="17" />
-          </el-button>
-        </div>
-        <div class="toolbarGroup">
-          <el-dropdown trigger="click" @command="setTextStyle">
-            <el-button
-              class="dropdownButton"
-              :class="{ active: editor.isActive('heading') }"
-              text
-              size="small"
-              aria-label="段落样式"
-              :title="textStyle">
-              <icon-heading :size="17" />
-              <icon-chevron-down :size="12" />
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item :command="0">正文</el-dropdown-item>
-                <el-dropdown-item v-for="level in headingLevels" :key="level" :command="level">标题 {{ level }}</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-dropdown trigger="click" @command="(index: number) => listTools[index]?.run(editor!.chain().focus()).run()">
-            <el-button
-              class="dropdownButton"
-              :class="{ active: listTools.some(item => editor!.isActive(item.name)) }"
-              text
-              size="small"
-              aria-label="列表"
-              title="列表">
-              <icon-list :size="17" />
-              <icon-chevron-down :size="12" />
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-for="(item, index) in listTools" :key="item.name" :command="index" :icon="item.icon">
-                  {{ item.label }}
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-tooltip v-for="item in blockTools" :key="item.name" :content="item.label" placement="bottom">
-            <el-button
-              class="toolButton"
-              :class="{ active: editor.isActive(item.name) }"
-              text
-              size="small"
-              :aria-label="item.label"
-              :aria-pressed="editor.isActive(item.name)"
-              @mousedown.prevent
-              @click="item.run(editor.chain().focus()).run()">
-              <component :is="item.icon" :size="17" />
-            </el-button>
-          </el-tooltip>
-        </div>
-        <div class="toolbarGroup">
-          <el-tooltip v-for="item in formatTools" :key="item.name" :content="item.label" placement="bottom">
-            <el-button
-              class="toolButton"
-              :class="{ active: editor.isActive(item.name) }"
-              text
-              size="small"
-              :aria-label="item.label"
-              :aria-pressed="editor.isActive(item.name)"
-              @mousedown.prevent
-              @click="item.run(editor.chain().focus()).run()">
-              <component :is="item.icon" :size="17" />
-            </el-button>
-          </el-tooltip>
-          <el-tooltip content="链接" placement="bottom">
-            <el-button
-              class="toolButton"
-              :class="{ active: editor.isActive('link') }"
-              text
-              size="small"
-              aria-label="链接"
-              :aria-pressed="editor.isActive('link')"
-              @mousedown.prevent
-              @click="editLink">
-              <icon-link :size="17" />
-            </el-button>
-          </el-tooltip>
-        </div>
-        <div class="toolbarGroup">
-          <el-tooltip v-for="item in scriptTools" :key="item.name" :content="item.label" placement="bottom">
-            <el-button
-              class="toolButton"
-              :class="{ active: editor.isActive(item.name) }"
-              text
-              size="small"
-              :aria-label="item.label"
-              :aria-pressed="editor.isActive(item.name)"
-              @mousedown.prevent
-              @click="item.run(editor.chain().focus()).run()">
-              <component :is="item.icon" :size="17" />
-            </el-button>
-          </el-tooltip>
-        </div>
-        <div class="toolbarGroup">
-          <el-tooltip v-for="item in alignmentTools" :key="item.value" :content="item.label" placement="bottom">
-            <el-button
-              class="toolButton"
-              :class="{ active: editor.isActive({ textAlign: item.value }) }"
-              text
-              size="small"
-              :aria-label="item.label"
-              :aria-pressed="editor.isActive({ textAlign: item.value })"
-              @mousedown.prevent
-              @click="editor.chain().focus().setTextAlign(item.value).run()">
-              <component :is="item.icon" :size="17" />
-            </el-button>
-          </el-tooltip>
-        </div>
-        <div class="toolbarGroup">
-          <el-dropdown trigger="click" @command="insertContent">
-            <el-button text size="small" aria-label="插入内容">
-              <icon-photo :size="17" />
-              添加
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="image" :icon="IconPhoto">图片链接</el-dropdown-item>
-                <el-dropdown-item command="table" :icon="IconTable">表格</el-dropdown-item>
-                <el-dropdown-item command="divider" :icon="IconSeparator">分隔线</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-dropdown v-if="editor.isActive('table')" trigger="click" @command="editTable">
-            <el-button text size="small">
-              表格
-              <icon-chevron-down :size="12" />
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-for="item in tableTools" :key="item.command" :command="item.command">{{ item.label }}</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-        <div class="toolbarGroup">
-          <el-tooltip content="复制 Markdown" placement="bottom">
-            <el-button class="toolButton" text size="small" :disabled="editor.isEmpty" aria-label="复制 Markdown" @click="copyMarkdown">
-              <icon-copy :size="17" />
-            </el-button>
-          </el-tooltip>
-          <el-popover
-            v-model:visible="searchVisible"
-            trigger="click"
-            :width="300"
-            placement="bottom-end"
-            @show="openSearch"
-            @hide="editor.commands.clearSearch()">
-            <template #reference>
-              <el-button class="toolButton" :class="{ active: searchVisible }" text size="small" aria-label="查找正文" title="查找正文">
-                <icon-search :size="17" />
-              </el-button>
-            </template>
-            <div class="findPanel" @keydown.esc.stop="searchVisible = false">
-              <el-input
-                ref="searchInput"
-                v-model="searchTerm"
-                size="small"
-                placeholder="查找正文"
-                aria-label="查找正文内容"
-                clearable
-                @input="value => editor!.commands.setSearchTerm(value)"
-                @keydown.enter.prevent="editor.commands.goToNextResult()" />
-              <div class="findActions">
-                <span aria-live="polite">{{ searchStatus }}</span>
-                <el-button
-                  text
-                  size="small"
-                  :disabled="!editor.storage.findAndReplace.results.length"
-                  aria-label="上一个匹配"
-                  @click="editor.commands.goToPreviousResult()">
-                  <icon-chevron-up :size="16" />
-                </el-button>
-                <el-button
-                  text
-                  size="small"
-                  :disabled="!editor.storage.findAndReplace.results.length"
-                  aria-label="下一个匹配"
-                  @click="editor.commands.goToNextResult()">
-                  <icon-chevron-down :size="16" />
-                </el-button>
-                <el-button text size="small" aria-label="关闭查找" @click="searchVisible = false"><icon-x :size="16" /></el-button>
-              </div>
-            </div>
-          </el-popover>
-        </div>
-      </div>
-      <editor-content class="editorBody" :editor="editor" />
-    </div>
+  <section ref="panelElement" class="documentPanel" aria-label="文档工作区">
+    <dockview-vue class="documentLayout" :theme="theme" :disableAutoResizing="true" :disableFloatingGroups="true" @ready="onLayoutReady" />
+    <openWithDialog ref="openWithRef" />
+    <quickOpen v-if="directory" ref="quickOpenRef" :directory="directory" @open="selection => openSelection(selection).catch(reportError)" />
+    <workspaceSearch v-if="directory" ref="searchRef" :directory="directory" :active="active" :replaceFile="replaceSearchFile" @open="openSearchResult" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onDeactivated, ref } from "vue";
-import { debounce } from "lodash-es";
-import { ElMessage, ElMessageBox, type InputInstance } from "element-plus";
-import { Editor, EditorContent, useEditor } from "@tiptap/vue-3";
-import type { ChainedCommands, EditorOptions } from "@tiptap/core";
+import { onActivated, onBeforeUnmount, onDeactivated, ref, shallowReactive, shallowRef, watch } from "vue";
+import { DockviewVue, type DockviewApi, type DockviewReadyEvent } from "dockview-vue";
+import { ElMessage } from "element-plus";
+import type { ExtResource } from "@toonflow/ext-scaffold/runtime";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { settings, settingsStorage } from "@/stores/settings";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
-import { writeClipboardText } from "@/lib/clipboard";
-import fileTree, { type TreeSelection } from "./components/fileTree.vue";
-import markdownExtensions, { serializeMarkdown } from "./markdownExtensions";
-import {
-  IconBold,
-  IconItalic,
-  IconStrikethrough,
-  IconCode,
-  IconList,
-  IconListNumbers,
-  IconListCheck,
-  IconBlockquote,
-  IconSourceCode,
-  IconLink,
-  IconPhoto,
-  IconTable,
-  IconSeparator,
-  IconHeading,
-  IconChevronDown,
-  IconChevronUp,
-  IconArrowBackUp,
-  IconArrowForwardUp,
-  IconCopy,
-  IconX,
-  IconUnderline,
-  IconHighlight,
-  IconSuperscript,
-  IconSubscript,
-  IconSearch,
-  IconAlignLeft,
-  IconAlignCenter,
-  IconAlignRight,
-  IconAlignJustified,
-} from "@tabler/icons-vue";
+import { waitForControlValue } from "@/lib/mcpControl";
+import { isCanvasFile } from "@/pages/workspace/canvasFile";
+import type { DocumentNode, DocumentNodeOptions } from "../canvas/canvasFiles";
+import fileTree, { type FileAction, type FileTreeItem, type TreeSelection } from "./components/fileTree.vue";
+import openWithDialog from "./components/openWithDialog.vue";
+import quickOpen from "./components/quickOpen.vue";
+import workspaceSearch from "./components/workspaceSearch.vue";
+import editorHost from "./editorHost.vue";
+import { createDocumentSession, documentError, type DocumentSession, type EditorParams, type EditorView, type TabAction } from "./documentSession";
+import { theme } from "./theme";
+import { locale, t } from "@toonflow/i18n/vue";
+import { extensionCandidates, extensionRevision, listExtensions, resolveExtension } from "./extensions";
+import "dockview-vue/dist/styles/dockview.css";
 
-type TextOutput = { id: string; label: string; text: string };
+defineOptions({ components: { fileTree, editorHost } });
 const props = defineProps<{
-  readNode: (directory: string, canvasPath: string, nodeId: string) => Promise<{ label: string; outputs: TextOutput[] }>;
-  saveNode: (directory: string, canvasPath: string, nodeId: string, handleId: string, text: string) => Promise<void>;
+  readNodes: (directory: string, options?: DocumentNodeOptions) => Promise<DocumentNode[]>;
+  focusNode: (directory: string, canvasPath: string, nodeId: string) => Promise<void>;
+  readNode: (directory: string, canvasPath: string, nodeId: string) => Promise<{ label: string; outputs: { id: string; label: string; text: string }[] }>;
+  saveNode: (directory: string, canvasPath: string, nodeId: string, handleId: string, text: string, expectedText?: string) => Promise<void>;
+  mountNode: (directory: string, canvasPath: string, nodeId: string, target: HTMLElement) => Promise<() => void>;
+  resolveNodeFile: (directory: string, path: string) => Promise<{ canvasPath: string; nodeId: string; label: string } | undefined>;
+  observeNode: (directory: string, canvasPath: string, nodeId: string, onState: (state: { dirty: boolean; error: string; deleted: boolean }) => void) => Promise<{ release(): void; flushSave(): Promise<void> }>;
+  flushNodes: () => Promise<void>;
+  fileAction: (directory: string, action: "copy" | "rename" | "move" | "delete", path: string, target?: string, nodeId?: string) => Promise<void>;
 }>();
-const workspaceStore = useWorkspaceStore();
-const selectedNode = ref<TreeSelection>();
-const nodeOutputs = ref<TextOutput[]>([]);
-const outputId = ref("");
-const opening = ref(false);
-const dirty = ref(false);
-const saveError = ref("");
-const selectedPath = computed(() => {
-  const selection = selectedNode.value;
-  if (!selection) return "";
-  return "filePath" in selection ? selection.filePath : selection.canvasPath;
-});
-let openRequest = 0;
-let draft: { directory: string; selection: TreeSelection; handleId: string; text: string } | undefined;
-let saving = Promise.resolve();
-const saveDocument = debounce((change: NonNullable<typeof draft>) => {
-  // ACT: 同一面板顺序落盘；每次保存固定目录、文件或画布节点，不随当前选择漂移。
-  saving = saving
-    .catch(() => {})
-    .then(() => ("filePath" in change.selection
-      ? useWorkspaceFiles(change.directory).write(change.selection.filePath, change.text)
-      : props.saveNode(change.directory, change.selection.canvasPath, change.selection.nodeId, change.handleId, change.text)))
-    .then(() => {
-      if (draft === change) {
-        dirty.value = false;
-        saveError.value = "";
-      }
-    })
-    .catch((error) => {
-      saveError.value = error instanceof Error ? error.message : "文本保存失败";
-      throw error;
+const workspace = useWorkspaceStore();
+const directory = workspace.project?.directory;
+const editorApi = shallowRef<DockviewApi>();
+const activeSelection = shallowRef<TreeSelection>();
+const sessions = new Map<string, DocumentSession>();
+const views = new Map<string, EditorView>();
+const sessionWatchers = new Map<DocumentSession, () => void>();
+const uniqueSessions = () => [...new Set(sessions.values())];
+const refreshQueue = new Set<DocumentSession>();
+const refreshing = new Set<DocumentSession>();
+let visibleSessions = new Set<DocumentSession>();
+const lifetime = new AbortController();
+const disposables: { dispose(): void }[] = [];
+const openWithRef = ref<InstanceType<typeof openWithDialog>>();
+const quickOpenRef = ref<InstanceType<typeof quickOpen>>();
+const searchRef = ref<InstanceType<typeof workspaceSearch>>();
+const panelElement = ref<HTMLElement>();
+let changingFiles = false;
+let openRevision = 0;
+let opening = Promise.resolve();
+let fileRevision = 0;
+const active = ref(true);
+const ready = ref(false);
+let refreshFileTree = () => {};
+let restoring = false;
+let rebuilding = false;
+let treeWidth = 260;
+let layoutTimer: ReturnType<typeof setTimeout> | undefined;
+const layoutKey = `toonflow:documentLayout:${directory}`;
+type SavedTab = { id?: string; preview?: boolean; selection: TreeSelection; extensionId: string };
+type SavedLayout = { layout: ReturnType<DockviewApi["toJSON"]>; tabs: SavedTab[]; treeWidth: number };
+const closedTabs: SavedTab[] = [];
+const extensionVersions = new Map<string, string | undefined>();
+let savedLayout: SavedLayout | undefined;
+try { savedLayout = JSON.parse(settingsStorage.getItem(layoutKey) ?? "null") ?? undefined; } catch { /* 旧布局损坏时从空工作区开始。 */ }
+if (savedLayout?.treeWidth && Number.isFinite(savedLayout.treeWidth)) treeWidth = Math.max(180, Math.min(600, savedLayout.treeWidth));
+
+function editorParams(id: string, session: DocumentSession): EditorParams {
+  return { session, view: views.get(id)!, close: () => closeEditor(id).catch(reportError), action: action => { void tabAction(id, action).catch(reportError); } };
+}
+
+function updateTabDescriptions() {
+  for (const [id, session] of sessions) {
+    const resource = session.context.resource;
+    const duplicate = uniqueSessions().some(other => other !== session && other.context.resource.label === resource.label);
+    views.get(id)!.description = duplicate ? (resource.kind === "canvasNode" ? resource.path : resource.path.split("/").slice(0, -1).join("/") || t`工作区`) : "";
+  }
+}
+
+watch(locale, updateTabDescriptions);
+
+function keepOpen(id: string) {
+  const view = views.get(id);
+  if (view) view.preview = false;
+  saveLayout();
+}
+
+function addView(id: string, session: DocumentSession, preview = false, position?: { referencePanel: string; direction: "right" | "below" }) {
+  if (sessions.has(id) || editorApi.value?.getPanel(id)) throw new Error("标签已打开，请重新选择");
+  sessions.set(id, session);
+  views.set(id, shallowReactive({ preview, description: "" }));
+  try {
+    editorApi.value!.addPanel({ id, title: session.context.resource.label, component: "extView", tabComponent: "editorTab", params: editorParams(id, session), position });
+    updateTabDescriptions();
+  } catch (error) { if (sessions.get(id) === session) { sessions.delete(id); views.delete(id); } throw error; }
+}
+
+function saveLayout() {
+  clearTimeout(layoutTimer);
+  if (restoring || changingFiles || !editorApi.value) return;
+  const layout = editorApi.value.toJSON();
+  // 仅保存布局与文件身份，不序列化运行中的组件、闭包或未保存正文。
+  const panels = Object.fromEntries(Object.entries(layout.panels).map(([id, panel]) => [id, { ...panel, params: undefined }]));
+  try {
+    settingsStorage.setItem(layoutKey, JSON.stringify({ layout: { ...layout, panels }, treeWidth,
+      tabs: [...sessions].map(([id, session]) => ({ id, preview: views.get(id)?.preview, selection: selectionOf(session.context.resource), extensionId: session.extension.id })) }));
+  } catch { /* 存储满或被禁用时仍允许正常编辑。 */ }
+}
+
+function scheduleLayoutSave() {
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(saveLayout, 250);
+}
+
+async function restoreLayout() {
+  const saved = savedLayout;
+  savedLayout = undefined;
+  if (!saved || !Array.isArray(saved.tabs)) return;
+  restoring = true;
+  try {
+    for (const tab of saved.tabs) {
+      try { await openSelection(tab.selection, lifetime.signal, false, tab.extensionId, tab.preview, tab.id); }
+      catch { /* 已删除的文件或扩展不阻止其余标签恢复。 */ }
+    }
+    const api = editorApi.value!;
+    if (saved.layout && Object.keys(saved.layout.panels).length === sessions.size && Object.keys(saved.layout.panels).every(id => sessions.has(id))) {
+      const panels = Object.fromEntries(Object.entries(saved.layout.panels).map(([id, panel]) => [id, { ...panel, contentComponent: "extView", tabComponent: "editorTab", params: editorParams(id, sessions.get(id)!) }]));
+      rebuilding = true;
+      try { api.fromJSON({ ...saved.layout, panels }); }
+      finally { rebuilding = false; }
+    }
+  } catch (error) { reportError(error); }
+  finally { restoring = false; saveLayout(); }
+}
+
+async function chooseExtension(resource: ExtResource, force: boolean) {
+  const options = await extensionCandidates(resource);
+  if (!options.length) throw new Error(`尚未启用支持此文件的扩展，请到插件市场安装或启用：${resource.label}`);
+  const key = resource.kind === "canvasNode" ? "canvasNode" : resource.path.split(".").at(-1)!.toLowerCase();
+  const associations = settings.value.documentExtensions as Record<string, string> | undefined;
+  const defaultId = options.find(option => option.id === associations?.[key])?.id;
+  if (!force && (defaultId || options.length === 1)) return resolveExtension(resource, defaultId ?? options[0]!.id);
+  const choice = await openWithRef.value?.choose(resource.label, options, defaultId);
+  if (!choice) return;
+  if (choice.makeDefault) settings.value.documentExtensions = { ...associations, [key]: choice.id };
+  return resolveExtension(resource, choice.id);
+}
+
+function selectionOf(resource: ExtResource): TreeSelection {
+  return resource.kind === "file" ? { filePath: resource.path, label: resource.label }
+    : { canvasPath: resource.path, nodeId: resource.nodeId, label: resource.label };
+}
+
+function onLayoutReady({ api }: DockviewReadyEvent) {
+  if (!directory) return;
+  const tree = api.addPanel({ id: "files", component: "fileTree", initialWidth: treeWidth, minimumWidth: 180,
+    params: { directory, selection: activeSelection, executeFileAction, readNodes: props.readNodes, focusNode: props.focusNode,
+      open: (selection: TreeSelection, preview = false) => { void openSelection(selection, lifetime.signal, false, undefined, preview).catch(reportError); },
+      quickOpen: () => quickOpenRef.value?.open(), search: () => searchRef.value?.open() },
+  });
+  tree.group.header.hidden = true;
+  let treeRevision = 0;
+  refreshFileTree = () => tree.api.updateParameters({ revision: ++treeRevision });
+  tree.group.locked = "no-drop-target";
+  const center = api.addGroup({ direction: "right", referenceGroup: tree.group });
+  center.header.hidden = true;
+  center.locked = "no-drop-target";
+  api.addPanel({ id: "editors", component: "editorHost", position: { referenceGroup: center }, params: { ready: onEditorReady } });
+  tree.group.api.setSize({ width: treeWidth });
+  disposables.push(tree.group.api.onDidDimensionsChange(() => { treeWidth = tree.group.api.width; scheduleLayoutSave(); }));
+  const observer = new ResizeObserver(([entry]) => {
+    if (!entry || entry.contentRect.width <= 0) return;
+    const width = tree.group.api.width || 260;
+    api.layout(entry.contentRect.width, entry.contentRect.height);
+    tree.group.api.setSize({ width });
+  });
+  observer.observe(panelElement.value!.querySelector(".documentLayout")!);
+  disposables.push({ dispose: () => observer.disconnect() });
+}
+
+async function onEditorReady({ api }: DockviewReadyEvent) {
+  editorApi.value = api;
+  disposables.push(api.onDidActivePanelChange(panel => {
+    const session = panel && sessions.get(panel.id);
+    activeSelection.value = session ? selectionOf(session.context.resource) : undefined;
+    refreshDocuments();
+  }));
+  disposables.push(api.onDidRemovePanel(panel => {
+    if (rebuilding) return;
+    const session = sessions.get(panel.id);
+    sessions.delete(panel.id);
+    views.delete(panel.id);
+    extensionVersions.delete(panel.id);
+    if (session && !uniqueSessions().includes(session)) {
+      session.cancelSave();
+      sessionWatchers.get(session)?.();
+      sessionWatchers.delete(session);
+    }
+    updateTabDescriptions();
+  }));
+  disposables.push(api.onDidLayoutChange(() => {
+    scheduleLayoutSave();
+    refreshDocuments();
+  }));
+  try { await restoreLayout(); }
+  finally { if (!lifetime.signal.aborted) ready.value = true; }
+}
+
+function reportError(error: unknown) { ElMessage.error(documentError(error)); }
+
+function relativePath(path: string) {
+  const parts = path.replaceAll("\\", "/").split("/").filter(part => part && part !== ".");
+  if (!parts.length || /^[\\/]/.test(path) || /^[a-z][a-z\d+.-]*:/i.test(path) || path.includes("\0") || parts.includes("..")) {
+    throw new Error("请选择工作区内的文件或目录");
+  }
+  return parts.join("/");
+}
+
+function pathIdentity(path: string) {
+  const normalized = relativePath(path);
+  return /^(?:[a-z]:[\\/]|\\\\|\/\/)/i.test(directory ?? "") ? normalized.toLowerCase() : normalized;
+}
+
+function openSelection(selection: TreeSelection, signal = lifetime.signal, forceChoice = false, extensionId?: string, preview = false, restoredId?: string) {
+  const request = ++openRevision;
+  // 打开方式选择、关闭旧扩展和登记视图共用顺序队列，避免异步保存时同一资源重复登记。
+  const result = opening.then(() => openSelectionNow(selection, signal, forceChoice, extensionId, preview, restoredId, request));
+  opening = result.then(() => {}, () => {});
+  return result;
+}
+
+async function openSelectionNow(selection: TreeSelection, signal: AbortSignal, forceChoice: boolean, extensionId: string | undefined, preview: boolean, restoredId: string | undefined, request: number) {
+  const revision = fileRevision;
+  signal.throwIfAborted();
+  if (changingFiles) throw new Error("文件操作尚未完成，请稍后再打开");
+  if (!directory || workspace.project?.directory !== directory) throw new Error("工作目录已切换");
+  const api = await waitForControlValue(() => editorApi.value, signal);
+  const resource: ExtResource = "filePath" in selection
+    ? { kind: "file", directory, path: relativePath(selection.filePath), label: selection.label }
+    : { kind: "canvasNode", directory, path: relativePath(selection.canvasPath), nodeId: selection.nodeId, label: selection.label };
+  if (resource.kind === "file" && /\.json$/i.test(resource.path) && await isCanvasFile(useWorkspaceFiles(directory), resource.path)) {
+    throw new Error("画布文件请展开后打开节点，不能作为普通文本编辑");
+  }
+  signal.throwIfAborted();
+  if (changingFiles || revision !== fileRevision || workspace.project?.directory !== directory) throw new Error("文件或工作目录已变更，请重新打开");
+  const resourceId = JSON.stringify([resource.kind, directory, pathIdentity(resource.path), resource.kind === "canvasNode" ? resource.nodeId : ""]);
+  const matching = [...sessions].filter(([, session]) => {
+    const current = session.context.resource;
+    return current.kind === resource.kind && pathIdentity(current.path) === pathIdentity(resource.path)
+      && (current.kind !== "canvasNode" || resource.kind === "canvasNode" && current.nodeId === resource.nodeId);
+  });
+  const match = matching.find(([id]) => api.getPanel(id)?.group === api.activeGroup) ?? matching[0];
+  const existing = match && api.getPanel(match[0]);
+  if (existing && !forceChoice) {
+    if (preview && request !== openRevision) return;
+    if (restoredId && !sessions.has(restoredId) && resource.kind === "file") {
+      addView(restoredId, match![1], preview);
+      extensionVersions.set(restoredId, extensionVersions.get(match![0]));
+      return match![1];
+    }
+    existing.api.setActive();
+    if (!preview) keepOpen(existing.id);
+    const session = match![1];
+    await session.ready;
+    signal.throwIfAborted();
+    return session;
+  }
+  let extension = extensionId ? await resolveExtension(resource, extensionId) : await chooseExtension(resource, forceChoice);
+  signal.throwIfAborted();
+  if (!extension) return;
+  if (preview && request !== openRevision) return;
+  const olderSession = [...sessions.values()].find(session => session.extension.id === extension!.id && session.extensionChanged && session.component);
+  // 同一扩展的旧标签仍打开时共用旧组件，避免新版样式提前替换旧编辑器的样式。
+  if (olderSession) extension = { ...olderSession.extension, load: async () => ({ default: olderSession.component! }) };
+  if (changingFiles || revision !== fileRevision) throw new Error("文件已变更，请重新打开");
+  // 等待选择期间可能已从其他入口打开同一文件。
+  const concurrent = [...sessions].find(([, session]) => session.context.resource.kind === resource.kind
+    && pathIdentity(session.context.resource.path) === pathIdentity(resource.path)
+    && (resource.kind === "file" || session.context.resource.kind === "canvasNode" && session.context.resource.nodeId === resource.nodeId));
+  if (concurrent) {
+    if (concurrent[1].extension.id === extension.id) {
+      api.getPanel(concurrent[0])!.api.setActive();
+      if (!preview) keepOpen(concurrent[0]);
+      return concurrent[1];
+    }
+    for (const [viewId, current] of [...sessions]) if (current === concurrent[1]) await closeEditor(viewId);
+  }
+  signal.throwIfAborted();
+  if (changingFiles || revision !== fileRevision || workspace.project?.directory !== directory) throw new Error("文件或工作目录已变更，请重新打开");
+  if (preview && !restoring && !restoredId) {
+    for (const panel of [...(api.activeGroup?.panels ?? [])]) {
+      if (!views.get(panel.id)?.preview) continue;
+      const current = sessions.get(panel.id)!;
+      if (current.context.dirty || current.context.error) { keepOpen(panel.id); continue; }
+      await closeEditor(panel.id, false);
+    }
+  }
+  if (preview && request !== openRevision) return;
+  const id = restoredId ?? resourceId;
+  const nodeResource = resource.kind === "canvasNode" ? resource : undefined;
+  const session = createDocumentSession(resource, extension, nodeResource
+    ? target => props.mountNode(nodeResource.directory, nodeResource.path, nodeResource.nodeId, target) : undefined,
+    nodeResource ? onState => props.observeNode(nodeResource.directory, nodeResource.path, nodeResource.nodeId, onState) : undefined,
+    () => {
+      editorApi.value?.getPanel(id)?.api.close();
+      // 节点删除先落盘，再重读 JSON 文件树，避免立即刷新读到删除前的节点。
+      if (!changingFiles && !lifetime.signal.aborted) void props.flushNodes().then(refreshFileTree).catch(reportError);
+    }, async path => {
+      await openSelection({ filePath: path, label: path.split("/").at(-1)! });
+      refreshFileTree();
     });
-  void saving.catch(() => {});
-}, 400);
-const searchVisible = ref(false);
-const searchTerm = ref("");
-const searchInput = ref<InputInstance>();
-const editorOptions: Partial<EditorOptions> = {
-  extensions: markdownExtensions,
-  content: "",
-  contentType: "markdown",
-  onUpdate({ editor }) {
-    const directory = workspaceStore.project?.directory;
-    if (!directory || !selectedNode.value || opening.value) return;
-    const text = serializeMarkdown(editor);
-    const output = nodeOutputs.value.find((output) => output.id === outputId.value);
-    if (output) output.text = text;
-    draft = { directory, selection: selectedNode.value, handleId: outputId.value, text };
-    dirty.value = true;
-    saveError.value = "";
-    saveDocument(draft);
-  },
-  editorProps: {
-    attributes: { role: "textbox", "aria-label": "Markdown 文档", "aria-multiline": "true" },
-    handlePaste: (_view, event) => {
-      const clipboard = event.clipboardData;
-      const markdown = clipboard?.getData("text/markdown");
-      const text = markdown || clipboard?.getData("text/plain");
-      if (!text || (!markdown && clipboard?.getData("text/html")) || editor.value?.isActive("codeBlock")) return false;
-      return editor.value?.commands.insertContent(text, { contentType: "markdown" }) ?? false;
-    },
-  },
-};
-const editor = useEditor(editorOptions);
+  session.context.active = active.value;
+  session.extensionChanged = !!olderSession;
+  extensionVersions.set(id, olderSession ? "pending-update" : extensionRevision(extension.id));
+  try {
+    addView(id, session, preview);
+    sessionWatchers.set(session, watch(() => session.context.dirty, dirty => {
+      if (dirty) for (const [viewId, current] of sessions) if (current === session) keepOpen(viewId);
+    }, { flush: "sync" }));
+  } catch (error) {
+    session.cancelSave();
+    if (sessions.get(id) === session) sessions.delete(id);
+    throw error;
+  }
+  await session.ready;
+  signal.throwIfAborted();
+  return session;
+}
+
+async function closeEditor(id: string, remember = true) {
+  const session = sessions.get(id);
+  if (!session) return;
+  if (session.closing) throw new Error("文档正在关闭，请稍后再试");
+  session.closing = true;
+  const release = session.lock();
+  try {
+    await session.context.flushSave();
+    if (remember) closedTabs.push({ selection: selectionOf(session.context.resource), extensionId: session.extension.id });
+    if (closedTabs.length > 20) closedTabs.shift();
+    editorApi.value?.getPanel(id)?.api.close();
+  } finally { session.closing = false; release(); }
+}
+
+async function tabAction(id: string, action: TabAction) {
+  const api = editorApi.value;
+  if (!api) return;
+  if (action === "reopen") {
+    const tab = closedTabs.at(-1);
+    if (tab) { await openSelection(tab.selection, lifetime.signal, false, tab.extensionId); closedTabs.pop(); }
+    return;
+  }
+  const panel = api.getPanel(id);
+  if (!panel) return;
+  if (action === "keepOpen") { keepOpen(id); return; }
+  if (action === "splitRight" || action === "splitDown") {
+    const session = sessions.get(id)!;
+    keepOpen(id);
+    if (session.context.resource.kind === "canvasNode") {
+      // ACT: 画布节点保留唯一运行实例，分屏只移动，不能复制 Teleport 的挂载目标。
+      if (panel.group.panels.length < 2) { ElMessage.info("画布节点只有一个视图，请先打开另一标签再移动到分屏"); return; }
+      panel.api.moveTo({ group: panel.group, position: action === "splitRight" ? "right" : "bottom" });
+    } else {
+      const viewId = `${id}:${crypto.randomUUID()}`;
+      addView(viewId, session, false, { referencePanel: id, direction: action === "splitRight" ? "right" : "below" });
+      extensionVersions.set(viewId, extensionVersions.get(id));
+    }
+    return;
+  }
+  const ids = action === "closeAll" ? api.panels.map(panel => panel.id)
+    : action === "closeOthers" ? api.panels.filter(panel => panel.id !== id).map(panel => panel.id)
+      : action === "closeRight" ? panel.group.panels.slice(panel.group.panels.indexOf(panel) + 1).map(panel => panel.id) : [id];
+  for (const viewId of ids) { try { await closeEditor(viewId); } catch (error) { reportError(error); } }
+}
 
 async function flushSave() {
-  if (saveError.value && draft) saveDocument(draft);
-  saveDocument.flush();
-  await saving;
+  const pending = uniqueSessions().map(session => ({ session, release: session.lock() }));
+  try { await Promise.all(pending.map(({ session }) => session.context.flushSave())); }
+  finally { pending.forEach(({ release }) => release()); }
 }
+function cancelSave() { for (const session of uniqueSessions()) session.cancelSave(); }
+function currentSession() { return sessions.get(editorApi.value?.activePanel?.id ?? ""); }
 
-function showOutput(id: string) {
-  const output = nodeOutputs.value.find((output) => output.id === id);
-  if (!output) throw new Error("文本输出不存在");
-  outputId.value = id;
-  searchVisible.value = false;
-  draft = undefined;
-  dirty.value = false;
-  saveError.value = "";
-  // 每个节点/输出重新建立编辑器，避免撤销跨文档修改。
-  editor.value?.destroy();
-  editor.value = new Editor({ ...editorOptions, content: output.text });
-}
-
-async function openNode(selection: TreeSelection, reportError = true, signal?: AbortSignal) {
-  signal?.throwIfAborted();
-  const directory = workspaceStore.project?.directory;
-  if (!directory) return;
-  const request = ++openRequest;
-  opening.value = true;
-  editor.value?.setEditable(false, false);
-  try {
-    await flushSave();
-    signal?.throwIfAborted();
-    if ("filePath" in selection) {
-      const text = await useWorkspaceFiles(directory).readText(selection.filePath);
-      signal?.throwIfAborted();
-      if (request !== openRequest || directory !== workspaceStore.project?.directory) return;
-      selectedNode.value = selection;
-      nodeOutputs.value = [{ id: "text", label: selection.label, text }];
-      showOutput("text");
-      return;
-    }
-    const document = await props.readNode(directory, selection.canvasPath, selection.nodeId);
-    signal?.throwIfAborted();
-    if (request !== openRequest || directory !== workspaceStore.project?.directory) return;
-    if (!document.outputs.length) throw new Error("节点没有文本输出");
-    selectedNode.value = { ...selection, label: document.label };
-    nodeOutputs.value = document.outputs;
-    showOutput(document.outputs[0]!.id);
-  } catch (error) {
-    if (!reportError) throw error;
-    if (request === openRequest) {
-      const fallback = "filePath" in selection ? "读取文件失败" : "读取节点失败";
-      ElMessage.error(error instanceof Error ? error.message : fallback);
-    }
-  } finally {
-    if (request === openRequest) {
-      opening.value = false;
-      editor.value?.setEditable(true, false);
-    }
-  }
-}
-
-async function openOutput(id: string, reportError = true, signal?: AbortSignal) {
-  signal?.throwIfAborted();
-  const request = ++openRequest;
-  opening.value = true;
-  editor.value?.setEditable(false, false);
-  try {
-    await flushSave();
-    signal?.throwIfAborted();
-    if (request === openRequest) showOutput(id);
-  } catch (error) {
-    if (!reportError) throw error;
-    if (request === openRequest) ElMessage.error(error instanceof Error ? error.message : "切换文本输出失败");
-  } finally {
-    if (request === openRequest) {
-      opening.value = false;
-      editor.value?.setEditable(true, false);
-    }
-  }
-}
-
-onBeforeUnmount(() => {
-  openRequest++;
-  saveDocument.cancel();
-});
-function getDocument(includeText = true) {
+function snapshot(session: DocumentSession | undefined, includeText: boolean) {
   return {
-    selection: selectedNode.value ?? null,
-    handleId: outputId.value || null,
-    dirty: dirty.value,
-    saveError: saveError.value || null,
-    ...(includeText ? { text: editor.value ? serializeMarkdown(editor.value) : "" } : {}),
+    selection: session ? selectionOf(session.context.resource) : null,
+    handleId: session?.handleId || (session?.extension.text ? "text" : null),
+    dirty: session?.context.dirty ?? false,
+    saveError: session?.context.error || null,
+    ...(includeText ? { text: session?.context.text ?? "", readOnly: !session?.extension.text && !session?.handleId } : {}),
   };
 }
 
+async function readSession(session: DocumentSession) {
+  await session.ready;
+  const resource = session.context.resource;
+  if (resource.kind !== "canvasNode") return;
+  const node = await props.readNode(resource.directory, resource.path, resource.nodeId);
+  const output = node.outputs.find(output => output.id === session.handleId) ?? node.outputs[0];
+  session.handleId = output?.id ?? "";
+  session.context.text = output?.text ?? "";
+}
+
+function getDocument(includeText = true) {
+  const session = currentSession();
+  if (!includeText || !session) return snapshot(session, includeText);
+  return readSession(session).then(() => {
+    if (currentSession() !== session) throw new Error("文档已切换，请重新读取");
+    return snapshot(session, true);
+  });
+}
+
 async function openDocument(args: Record<string, unknown>, signal: AbortSignal) {
-  signal.throwIfAborted();
   let selection: TreeSelection;
-  if (typeof args.path === "string" && /\.(md|markdown)$/i.test(args.path)) {
-    selection = { filePath: args.path, label: args.path.split(/[\\/]/).at(-1)! };
-  } else if (typeof args.canvasPath === "string" && typeof args.nodeId === "string") {
-    selection = { canvasPath: args.canvasPath, nodeId: args.nodeId, label: args.nodeId };
-  } else throw new Error("请指定 Markdown 文件 path，或画布 canvasPath 和 nodeId");
-  await openNode(selection, false, signal);
+  if (typeof args.path === "string") selection = { filePath: args.path, label: args.path.split(/[\\/]/).at(-1)! };
+  else if (typeof args.canvasPath === "string" && typeof args.nodeId === "string") selection = { canvasPath: args.canvasPath, nodeId: args.nodeId, label: args.nodeId };
+  else throw new Error("请指定文件 path，或画布 canvasPath 和 nodeId");
+  const session = await openSelection(selection, signal);
+  if (!session) throw new Error("已取消选择打开方式");
+  if (typeof args.handleId === "string" && session.context.resource.kind === "canvasNode") {
+    const resource = session.context.resource;
+    const node = await props.readNode(resource.directory, resource.path, resource.nodeId);
+    if (!node.outputs.some(output => output.id === args.handleId)) throw new Error("文本输出不存在");
+    session.handleId = args.handleId;
+  }
   signal.throwIfAborted();
-  const current = selectedNode.value;
-  if (!current || ("filePath" in selection
-    ? !("filePath" in current) || current.filePath !== selection.filePath
-    : !("canvasPath" in current) || current.canvasPath !== selection.canvasPath || current.nodeId !== selection.nodeId)) {
-    throw new Error("文档已切换，请重新读取当前文档");
-  }
-  if (typeof args.handleId === "string") {
-    if (!nodeOutputs.value.some(output => output.id === args.handleId)) throw new Error("文本输出不存在");
-    await openOutput(args.handleId, false, signal);
-    signal.throwIfAborted();
-  }
+  if (currentSession() !== session) throw new Error("文档已切换，请重新读取");
 }
 
 async function writeDocument(args: Record<string, unknown>, signal: AbortSignal) {
   signal.throwIfAborted();
-  if (!selectedNode.value || !editor.value || opening.value) throw new Error("请先打开需要编辑的文档");
+  const session = currentSession();
+  if (!session || session.closing || session.context.loading) throw new Error("请先打开需要编辑的文档");
   if (typeof args.text !== "string" || typeof args.expectedText !== "string") throw new Error("需要 text 和读取时的 expectedText");
-  if (serializeMarkdown(editor.value) !== args.expectedText) throw new Error("文档内容已变化，请重新读取后编辑");
-  editor.value.commands.setContent(args.text, { contentType: "markdown" });
-  await flushSave();
+  await readSession(session);
+  signal.throwIfAborted();
+  if (currentSession() !== session) throw new Error("文档已切换，请重新读取");
+  if (session.closing || session.context.loading) throw new Error("文档正在关闭或加载，请稍后再试");
+  if (session.context.text !== args.expectedText) throw new Error("文档内容已变化，请重新读取后编辑");
+  const resource = session.context.resource;
+  if (resource.kind === "canvasNode") {
+    if (!session.handleId) throw new Error("当前节点没有可编辑的文本输出");
+    await props.saveNode(resource.directory, resource.path, resource.nodeId, session.handleId, args.text, args.expectedText);
+    await readSession(session);
+  } else {
+    if (!session.extension.text) throw new Error("当前文件扩展不支持文本编辑");
+    session.context.updateText(args.text);
+    await session.context.flushSave();
+  }
   signal.throwIfAborted();
 }
 
-defineExpose({ flushSave, cancelSave: () => saveDocument.cancel(), getDocument, openDocument, writeDocument });
-
-const headingLevels = [1, 2, 3, 4, 5, 6] as const;
-type HeadingLevel = (typeof headingLevels)[number];
-const textStyle = computed(() => {
-  const level = headingLevels.find((level) => editor.value?.isActive("heading", { level }));
-  return level ? `标题 ${level}` : "正文";
-});
-const searchStatus = computed(() => {
-  const search = editor.value?.storage.findAndReplace;
-  return search?.results.length ? `${(search.currentIndex ?? 0) + 1} / ${search.results.length}` : "0 / 0";
-});
-const formatTools = [
-  { name: "bold", label: "加粗", icon: IconBold, run: (chain: ChainedCommands) => chain.toggleBold() },
-  { name: "italic", label: "斜体", icon: IconItalic, run: (chain: ChainedCommands) => chain.toggleItalic() },
-  { name: "strike", label: "删除线", icon: IconStrikethrough, run: (chain: ChainedCommands) => chain.toggleStrike() },
-  { name: "code", label: "行内代码", icon: IconCode, run: (chain: ChainedCommands) => chain.toggleCode() },
-  { name: "underline", label: "下划线", icon: IconUnderline, run: (chain: ChainedCommands) => chain.toggleUnderline() },
-  { name: "highlight", label: "高亮", icon: IconHighlight, run: (chain: ChainedCommands) => chain.toggleHighlight() },
-];
-const listTools = [
-  { name: "bulletList", label: "无序列表", icon: IconList, run: (chain: ChainedCommands) => chain.toggleBulletList() },
-  { name: "orderedList", label: "有序列表", icon: IconListNumbers, run: (chain: ChainedCommands) => chain.toggleOrderedList() },
-  { name: "taskList", label: "任务列表", icon: IconListCheck, run: (chain: ChainedCommands) => chain.toggleTaskList() },
-];
-const blockTools = [
-  { name: "blockquote", label: "引用", icon: IconBlockquote, run: (chain: ChainedCommands) => chain.toggleBlockquote() },
-  { name: "codeBlock", label: "代码块", icon: IconSourceCode, run: (chain: ChainedCommands) => chain.toggleCodeBlock() },
-];
-const scriptTools = [
-  { name: "superscript", label: "上标", icon: IconSuperscript, run: (chain: ChainedCommands) => chain.unsetSubscript().toggleSuperscript() },
-  { name: "subscript", label: "下标", icon: IconSubscript, run: (chain: ChainedCommands) => chain.unsetSuperscript().toggleSubscript() },
-];
-const alignmentTools = [
-  { value: "left", label: "左对齐", icon: IconAlignLeft },
-  { value: "center", label: "居中对齐", icon: IconAlignCenter },
-  { value: "right", label: "右对齐", icon: IconAlignRight },
-  { value: "justify", label: "两端对齐", icon: IconAlignJustified },
-];
-const tableTools = [
-  { command: "addRowAfter", label: "在下方插入行" },
-  { command: "addColumnAfter", label: "在右侧插入列" },
-  { command: "deleteRow", label: "删除当前行" },
-  { command: "deleteColumn", label: "删除当前列" },
-  { command: "deleteTable", label: "删除表格" },
-] as const;
-
-function setTextStyle(level: HeadingLevel | 0) {
-  const chain = editor.value?.chain().focus();
-  if (level === 0) chain?.setParagraph().run();
-  else chain?.setHeading({ level }).run();
-}
-
-function editTable(command: (typeof tableTools)[number]["command"]) {
-  editor.value?.chain().focus()[command]().run();
-}
-
-async function openSearch() {
-  editor.value?.commands.setSearchTerm(searchTerm.value);
-  await nextTick();
-  searchInput.value?.focus();
-}
-
-async function editLink() {
-  const currentEditor = editor.value;
-  if (!currentEditor) return;
+async function openSearchResult(location: { path: string; line: number; column: number; query: string }) {
   try {
-    const { value } = await ElMessageBox.prompt("输入链接地址，留空可移除链接", "链接", {
-      inputValue: currentEditor.getAttributes("link").href || "",
-      inputValidator: (value) => !value?.trim() || /^(https?:\/\/|mailto:)\S+$/i.test(value.trim()) || "请输入有效的 https、http 或 mailto 链接",
-      confirmButtonText: "确定",
-      cancelButtonText: "取消",
+    const session = await openSelection({ filePath: location.path, label: location.path.split("/").at(-1)! });
+    const id = editorApi.value?.activePanel?.id;
+    if (session && id && sessions.get(id) === session) views.get(id)!.location = { ...location, revision: Date.now() };
+  } catch (error) { reportError(error); }
+}
+
+async function replaceSearchFile(path: string, expectedText: string, nextText: string) {
+  if (!directory || workspace.project?.directory !== directory || changingFiles) throw new Error("工作区或文件正在变更，请重新搜索");
+  path = relativePath(path);
+  changingFiles = true;
+  fileRevision++;
+  try {
+    const files = useWorkspaceFiles(directory);
+    if (/\.json$/i.test(path) && await isCanvasFile(files, path)) throw new Error("画布 JSON 不支持全文替换，请编辑节点内容");
+    const node = await props.resolveNodeFile(directory, path);
+    if (node) {
+      const document = await props.readNode(directory, node.canvasPath, node.nodeId);
+      const output = document.outputs.find(output => output.text === expectedText);
+      if (!output) throw new Error("节点内容已变化，请重新搜索");
+      await props.saveNode(directory, node.canvasPath, node.nodeId, output.id, nextText, expectedText);
+      await props.flushNodes();
+      return;
+    }
+    const session = uniqueSessions().find(session => session.context.resource.kind === "file" && pathIdentity(session.context.resource.path) === pathIdentity(path));
+    if (session) {
+      await session.ready;
+      if (!session.extension.text || session.context.loading || session.context.text !== expectedText) throw new Error("打开的文档内容已变化或不可编辑，请重新搜索");
+      session.context.updateText(nextText);
+      const release = session.lock();
+      try { await session.context.flushSave(); } finally { release(); }
+    } else {
+      const snapshot = await files.readTextSnapshot(path);
+      if (snapshot.text !== expectedText) throw new Error("磁盘内容已变化，请重新搜索");
+      await files.writeTextSnapshot(path, nextText, snapshot);
+    }
+  } finally { changingFiles = false; }
+}
+
+async function refreshExtensions() {
+  try {
+    const enabled = new Set((await listExtensions()).filter(extension => extension.enabled).map(extension => extension.id));
+    for (const [id, session] of [...sessions]) {
+      if (!enabled.has(session.extension.id)) {
+        session.extensionDisabled = true;
+        try { await closeEditor(id); }
+        catch (error) { session.context.error = `扩展已停用；为保留未保存内容，此标签仍保持打开。${documentError(error)}`; reportError(error); }
+      } else {
+        session.extensionDisabled = false;
+        if (extensionVersions.get(id) !== extensionRevision(session.extension.id)) session.extensionChanged = true;
+      }
+    }
+  } catch (error) { reportError(error); }
+}
+
+async function executeFileAction(action: FileAction, item: FileTreeItem, target?: string) {
+  if (!directory || workspace.project?.directory !== directory) throw new Error("工作目录已切换");
+  if (action === "openWith") {
+    await openSelection({ filePath: item.path, label: item.name }, lifetime.signal, true);
+    return;
+  }
+  const files = useWorkspaceFiles(directory);
+  if (action === "reveal") return files.reveal(item.path);
+  if (action === "create") return files.write(item.path, "", true);
+  if (action === "mkdir") return files.mkdir(item.path);
+  if (changingFiles) throw new Error("文件操作尚未完成，请稍后再试");
+  if (!item.path || (item.type === "node" && (action !== "delete" || !item.nodeId))) throw new Error("不能修改这个文件树条目");
+  const sourcePath = relativePath(item.path);
+  if (target !== undefined) target = relativePath(target);
+  if (item.type === "canvas" && ["rename", "move"].includes(action) && !target?.toLowerCase().endsWith(".json")) throw new Error("画布文件须保留 .json 后缀");
+  changingFiles = true;
+  fileRevision++;
+  const pending = [...sessions.entries()].map(([id, session]) => ({ id, session, release: session.lock() }));
+  const previousLayout = editorApi.value?.toJSON();
+  const renamed: { id: string; nextId: string; preview: boolean; selection: TreeSelection; extensionId: string; wasActive: boolean }[] = [];
+  try {
+    await Promise.all(pending.map(({ session }) => session.context.flushSave()));
+    await props.fileAction(directory, action, sourcePath, target, item.type === "node" ? item.nodeId : undefined);
+    if (action !== "copy") {
+      const sourceIdentity = pathIdentity(sourcePath);
+      for (const { id, session } of pending) {
+        if (item.type === "node" && (session.context.resource.kind !== "canvasNode" || session.context.resource.nodeId !== item.nodeId)) continue;
+        const path = pathIdentity(session.context.resource.path);
+        if (path === sourceIdentity || path.startsWith(`${sourceIdentity}/`)) {
+          if (action === "rename" || action === "move") {
+            const resource = session.context.resource;
+            const renamedPath = `${target}${resource.path.slice(sourcePath.length)}`;
+            renamed.push({
+              id, nextId: `document:${crypto.randomUUID()}`, preview: views.get(id)?.preview ?? false,
+              selection: selectionOf({ ...resource, path: renamedPath, label: resource.kind === "file" ? renamedPath.split("/").at(-1)! : resource.label }),
+              extensionId: session.extension.id, wasActive: editorApi.value?.activePanel?.id === id,
+            });
+          }
+          editorApi.value?.getPanel(id)?.api.close();
+        }
+      }
+    }
+  } finally {
+    changingFiles = false;
+    pending.forEach(({ release }) => release());
+  }
+  for (const entry of renamed.sort((left, right) => Number(left.wasActive) - Number(right.wasActive))) {
+    const resource: ExtResource = "filePath" in entry.selection
+      ? { kind: "file", directory, path: entry.selection.filePath, label: entry.selection.label }
+      : { kind: "canvasNode", directory, path: entry.selection.canvasPath, label: entry.selection.label, nodeId: entry.selection.nodeId };
+    const supported = (await extensionCandidates(resource)).some(extension => extension.id === entry.extensionId);
+    await openSelection(entry.selection, lifetime.signal, false, supported ? entry.extensionId : undefined, entry.preview, entry.nextId).catch(reportError);
+  }
+  const remappedIds = new Map(renamed.map(entry => [entry.id, entry.nextId]));
+  const expectedIds = previousLayout && Object.keys(previousLayout.panels).map(id => remappedIds.get(id) ?? id);
+  // 重开期间用户可能继续关闭或打开标签，此时以当前布局为准，不恢复过时的布局快照。
+  if (renamed.length && previousLayout && expectedIds?.length === sessions.size && expectedIds.every(id => sessions.has(id))) {
+    const layout: SavedLayout["layout"] = JSON.parse(JSON.stringify({ ...previousLayout, panels: {} }, (_key, value) => typeof value === "string" ? remappedIds.get(value) ?? value : value));
+    layout.panels = Object.fromEntries(Object.entries(previousLayout.panels).map(([oldId, panel]) => {
+      const id = remappedIds.get(oldId) ?? oldId;
+      const session = sessions.get(id)!;
+      return [id, { ...panel, id, title: session.context.resource.label, params: editorParams(id, session) }];
+    }));
+    rebuilding = true;
+    try { editorApi.value!.fromJSON(layout); } finally { rebuilding = false; }
+  }
+  saveLayout();
+}
+async function performFileAction(currentDirectory: string, action: "copy" | "rename" | "move" | "delete", path: string, target?: string, entryType: "canvas" | "directory" = "canvas") {
+  if (currentDirectory !== directory) throw new Error("工作目录已切换");
+  await executeFileAction(action, { key: path, path, name: path.split(/[\\/]/).at(-1)!, type: entryType }, target);
+  refreshFileTree();
+}
+window.addEventListener("toonflow:ext-updated", refreshExtensions);
+function beforeUnload(event: BeforeUnloadEvent) {
+  saveLayout();
+  if (![...sessions.values()].some(session => session.context.dirty)) return;
+  event.preventDefault();
+  event.returnValue = "";
+}
+function drainRefreshQueue() {
+  if (!active.value || lifetime.signal.aborted) { refreshQueue.clear(); return; }
+  // ACT: 只检查可见分组中的文档，最多同时读两个文件；隐藏标签切回来时再读取。
+  for (const session of refreshQueue) {
+    if (refreshing.size >= 2) break;
+    refreshQueue.delete(session);
+    if (!visibleSessions.has(session)) continue;
+    refreshing.add(session);
+    void session.refreshDisk().catch(error => { session.context.error = documentError(error); }).finally(() => {
+      refreshing.delete(session);
+      drainRefreshQueue();
     });
-    if (currentEditor.isDestroyed) return;
-    const chain = currentEditor.chain().focus().extendMarkRange("link");
-    if (value?.trim()) chain.setLink({ href: value.trim() }).run();
-    else chain.unsetLink().run();
-  } catch {
-    // 关闭弹窗时保留原有内容。
   }
 }
-
-async function insertContent(command: "image" | "table" | "divider") {
-  const currentEditor = editor.value;
-  if (!currentEditor) return;
-  if (command === "table") return currentEditor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
-  if (command === "divider") return currentEditor.chain().focus().setHorizontalRule().run();
-  try {
-    const { value } = await ElMessageBox.prompt("输入图片地址", "插入图片", {
-      inputValidator: (value) => /^https?:\/\/\S+$/i.test(value?.trim() || "") || "请输入有效的 https 或 http 图片地址",
-      confirmButtonText: "插入",
-      cancelButtonText: "取消",
-    });
-    if (!currentEditor.isDestroyed) currentEditor.chain().focus().setImage({ src: value.trim() }).run();
-  } catch {
-    // 关闭弹窗时保留原有内容。
+function refreshDocuments(force = false) {
+  if (!active.value || lifetime.signal.aborted) return;
+  const visible = new Set((editorApi.value?.panels ?? []).filter(panel => panel.api.isVisible)
+    .map(panel => sessions.get(panel.id)).filter((session): session is DocumentSession => !!session));
+  for (const session of visible) {
+    if ((force || !visibleSessions.has(session)) && !refreshing.has(session)) refreshQueue.add(session);
+  }
+  visibleSessions = visible;
+  drainRefreshQueue();
+}
+function onWindowFocus() { refreshDocuments(true); }
+function onDocumentKeydown(event: KeyboardEvent) {
+  if (!active.value || event.altKey || !(event.ctrlKey || event.metaKey)) return;
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target && target !== document.body && !target.closest(".documentPanel")) return;
+  const api = editorApi.value;
+  if (!api) return;
+  if (!event.shiftKey && event.key.toLowerCase() === "p") {
+    event.preventDefault(); quickOpenRef.value?.open();
+  } else if (event.shiftKey && event.key.toLowerCase() === "f") {
+    event.preventDefault(); searchRef.value?.open();
+  } else if (event.shiftKey && event.key.toLowerCase() === "t") {
+    event.preventDefault(); void tabAction("", "reopen").catch(reportError);
+  } else if (event.key.toLowerCase() === "w" && api.activePanel) {
+    event.preventDefault(); void tabAction(api.activePanel.id, "close").catch(reportError);
+  } else if (event.key === "Tab" || event.key === "PageDown" || event.key === "PageUp") {
+    event.preventDefault();
+    const panels = api.panels;
+    const index = panels.findIndex(panel => panel.id === api.activePanel?.id);
+    const backwards = event.shiftKey || event.key === "PageUp";
+    panels[(index + (backwards ? -1 : 1) + panels.length) % panels.length]?.api.setActive();
   }
 }
-
-async function copyMarkdown() {
-  if (!editor.value) return;
-  try {
-    await writeClipboardText(serializeMarkdown(editor.value));
-    ElMessage.success("已复制 Markdown");
-  } catch {
-    ElMessage.error("复制失败，请检查剪贴板权限");
-  }
-}
-
-onDeactivated(() => {
-  searchVisible.value = false;
-  editor.value?.commands.clearSearch();
-  editor.value?.commands.blur();
+window.addEventListener("beforeunload", beforeUnload);
+window.addEventListener("focus", onWindowFocus);
+window.addEventListener("keydown", onDocumentKeydown, true);
+onActivated(() => { active.value = true; for (const session of uniqueSessions()) session.context.active = true; refreshDocuments(true); refreshFileTree(); });
+onDeactivated(() => { active.value = false; refreshQueue.clear(); visibleSessions.clear(); for (const session of uniqueSessions()) session.context.active = false; });
+onBeforeUnmount(() => {
+  window.removeEventListener("toonflow:ext-updated", refreshExtensions);
+  window.removeEventListener("beforeunload", beforeUnload);
+  window.removeEventListener("focus", onWindowFocus);
+  window.removeEventListener("keydown", onDocumentKeydown, true);
+  clearTimeout(layoutTimer);
+  saveLayout();
+  lifetime.abort(new Error("文档工作区已关闭"));
+  cancelSave();
+  sessionWatchers.forEach(stop => stop());
+  disposables.forEach(disposable => disposable.dispose());
 });
+defineExpose({ ready, flushSave, cancelSave, getDocument, openDocument, writeDocument, performFileAction });
 </script>
 
-<style scoped lang="scss">
+<style lang="scss">
 .documentPanel {
-  display: grid;
-  grid-template-columns: 220px minmax(min-content, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  gap: 20px;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
-  box-sizing: border-box;
-  padding: 64px 20px 20px;
-  padding-right: calc(20px + var(--agentWidth, 0px));
+  padding-top: 60px;
+  padding-right: var(--agentWidth, 0px);
   overflow: hidden;
-  background: var(--el-fill-color-light);
-
-  .editorSurface {
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: 100%;
-    min-width: min-content;
-    max-width: 960px;
-    height: 100%;
-    margin: 0 auto;
-    overflow: hidden;
-    border: 1px solid var(--el-border-color-light);
-    border-radius: var(--ui-radius-large, 12px);
-    background: var(--el-bg-color-overlay);
-    box-shadow: var(--el-box-shadow-lighter);
-
-    .documentHeader {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-shrink: 0;
-      padding: 8px 16px;
-      font-size: 12px;
-
-      .documentName {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .outputSelect {
-        width: 160px;
-      }
-      .saveStatus {
-        color: var(--el-text-color-secondary);
-      }
-    }
-
-    .editorToolbar {
-      display: flex;
-      flex-shrink: 0;
-      align-items: center;
-      justify-content: center;
-      padding: 8px;
-      border-bottom: 1px solid var(--el-border-color-lighter);
-
-      :deep(.el-button) {
-        gap: 4px;
-        margin-left: 0;
-
-        > span {
-          gap: 4px;
-        }
-      }
-
-      .toolbarGroup {
-        display: flex;
-        flex-shrink: 0;
-        align-items: center;
-        gap: 2px;
-        padding: 0 7px;
-
-        + .toolbarGroup {
-          border-left: 1px solid var(--el-border-color-lighter);
-        }
-      }
-
-      .toolButton,
-      .dropdownButton {
-        height: 32px;
-        border-radius: 7px;
-
-        &.active {
-          color: var(--el-color-primary);
-          background: var(--el-color-primary-light-9);
-        }
-      }
-
-      .toolButton {
-        width: 30px;
-        padding: 0;
-      }
-
-      .dropdownButton {
-        padding: 0 5px;
-      }
-    }
-
-    .editorBody {
-      contain: inline-size;
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      padding: 48px clamp(24px, 5vw, 64px) 64px;
-
-      :deep(.tiptap) {
-        box-sizing: border-box;
-        width: 100%;
-        min-height: 100%;
-        cursor: text;
-        outline: none;
-        color: var(--el-text-color-primary);
-        font-size: 15px;
-        line-height: 1.8;
-        overflow-wrap: anywhere;
-
-        > :first-child {
-          margin-top: 0;
-        }
-        p {
-          margin: 0.6em 0;
-        }
-        h1,
-        h2,
-        h3,
-        h4,
-        h5,
-        h6 {
-          margin: 1.4em 0 0.5em;
-          font-weight: 600;
-          line-height: 1.35;
-        }
-        h1 {
-          font-size: 2em;
-        }
-        h2 {
-          font-size: 1.6em;
-        }
-        h3 {
-          font-size: 1.3em;
-        }
-        h4,
-        h5,
-        h6 {
-          font-size: 1.1em;
-        }
-        ul,
-        ol {
-          padding-left: 1.6em;
-        }
-        li > p {
-          margin: 0.2em 0;
-        }
-        a {
-          color: var(--el-color-primary);
-          text-decoration: underline;
-        }
-        mark {
-          padding: 1px 2px;
-          border-radius: 3px;
-          background: var(--el-color-warning-light-7);
-          color: inherit;
-        }
-        blockquote {
-          margin: 1em 0;
-          padding-left: 1em;
-          border-left: 3px solid var(--el-border-color);
-          color: var(--el-text-color-secondary);
-        }
-        code {
-          padding: 2px 5px;
-          border-radius: 4px;
-          background: var(--el-fill-color);
-          font-family: monospace;
-          font-size: 0.9em;
-        }
-        pre {
-          padding: 14px 18px;
-          border-radius: 8px;
-          background: var(--el-fill-color-light);
-          overflow-x: auto;
-          code {
-            padding: 0;
-            background: none;
-          }
-        }
-        hr {
-          margin: 1.5em 0;
-          border: 0;
-          border-top: 1px solid var(--el-border-color);
-        }
-        img {
-          display: block;
-          max-width: 100%;
-          height: auto;
-          border-radius: 6px;
-        }
-        .ProseMirror-selectednode {
-          outline: 2px solid var(--el-color-primary);
-        }
-        ul[data-type="taskList"] {
-          padding-left: 0;
-          list-style: none;
-          li {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            > label {
-              flex: 0 0 auto;
-              padding-top: 3px;
-              user-select: none;
-            }
-            > div {
-              flex: 1;
-              min-width: 0;
-            }
-            input {
-              accent-color: var(--el-color-primary);
-              cursor: pointer;
-            }
-          }
-        }
-        table {
-          width: 100%;
-          margin: 1em 0;
-          border-collapse: collapse;
-          table-layout: fixed;
-          td,
-          th {
-            position: relative;
-            min-width: 40px;
-            padding: 6px 10px;
-            border: 1px solid var(--el-border-color);
-            vertical-align: top;
-          }
-          th {
-            background: var(--el-fill-color-light);
-            font-weight: 600;
-            text-align: left;
-          }
-          .selectedCell {
-            background: var(--el-color-primary-light-9);
-          }
-        }
-      }
-    }
-  }
-}
-
-.findPanel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-
-  .findActions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-
-    > span {
-      flex: 1;
-      color: var(--el-text-color-secondary);
-      font-size: 12px;
-    }
-    :deep(.el-button) {
-      margin-left: 0;
-      padding: 5px;
-    }
+  background: var(--el-bg-color);
+  .documentLayout { width: 100%; height: 100%; border-top: 1px solid var(--el-border-color); }
+  .dockviewToonflow {
+    --dv-background-color: var(--el-bg-color);
+    --dv-group-view-background-color: var(--el-bg-color);
+    --dv-tabs-and-actions-container-background-color: var(--el-fill-color-light);
+    --dv-activegroup-visiblepanel-tab-background-color: var(--el-bg-color);
+    --dv-activegroup-hiddenpanel-tab-background-color: var(--el-fill-color-light);
+    --dv-inactivegroup-visiblepanel-tab-background-color: var(--el-bg-color);
+    --dv-inactivegroup-hiddenpanel-tab-background-color: var(--el-fill-color-light);
+    --dv-activegroup-visiblepanel-tab-color: var(--el-text-color-primary);
+    --dv-activegroup-hiddenpanel-tab-color: var(--el-text-color-secondary);
+    --dv-inactivegroup-visiblepanel-tab-color: var(--el-text-color-regular);
+    --dv-inactivegroup-hiddenpanel-tab-color: var(--el-text-color-secondary);
+    --dv-tab-divider-color: var(--el-border-color);
+    --dv-separator-border: var(--el-border-color);
+    --dv-tabs-and-actions-container-height: 35px;
+    --dv-drag-over-background-color: var(--el-color-primary-light-8);
+    --dv-drag-over-border-color: var(--el-color-primary);
+    .dv-tab { padding: 0; }
+    .dv-tab.dv-active-tab { border-top: 2px solid var(--el-color-primary); }
   }
 }
 </style>

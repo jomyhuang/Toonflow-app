@@ -44,10 +44,13 @@ export const audioGenerationSchema = z.strictObject({
   modelId: sharedFields.modelId,
   prompt: sharedFields.prompt,
   outputDirectory: sharedFields.outputDirectory,
+  images: sharedFields.images,
   audios: z.array(audioReference).max(64).optional(),
   voice: z.string().trim().min(1).max(256).optional(),
   speed: z.number().finite().positive().optional(),
   volume: z.number().finite().optional(),
+  pitch: z.number().finite().optional(),
+  language: z.string().trim().min(1).max(64).optional(),
   format: z.string().trim().min(1).max(64).optional(),
   sampleRate: z.number().int().positive().optional(),
 });

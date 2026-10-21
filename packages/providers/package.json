@@ -13,6 +13,9 @@
     "./language/deepSeek": "./src/language/deepSeek.ts",
     "./media/tfRouter": "./src/media/tfRouter.ts",
     "./language/zhipuCoding": "./src/language/zhipuCoding.ts",
-    "./media/comfyuiLocal": "./src/media/comfyuiLocal.ts"
+    "./media/comfyuiLocal": "./src/media/comfyuiLocal.ts",
+    "./media/apiMart": "./src/media/apiMart.ts",
+    "./media/metaso": "./src/media/metaso.ts",
+    "./media/compshare": "./src/media/compshare.ts"
   }
 }

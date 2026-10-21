@@ -10,7 +10,7 @@
           :disabled="saving"
           :aria-pressed="selectedProvider === item.id"
           @click="selectedProvider = item.id">
-          <img v-if="item.id === 'tfRouter'" class="providerLogo" :src="logoUrl" alt="" />
+          <img v-if="item.icon" class="providerLogo" :class="{ monochrome: item.id === 'tfRouter' }" :src="item.icon" alt="" />
           <modelIcon v-else :model="item.id" :size="18" />
           <span>{{ item.label }}</span>
         </button>
@@ -37,7 +37,7 @@
               </template>
             </el-auto-resizer>
           </div>
-          <el-text v-else-if="!fetching" type="info" size="small">{{ formValues.apiKey ? '未获取到模型' : '填写 API Key 后自动获取模型列表' }}</el-text>
+          <el-text v-else-if="!fetching" type="info" size="small">{{ activeProvider && isTfRouterProvider(activeProvider) ? '保存 API Key 后自动获取模型列表' : formValues.apiKey ? '未获取到模型' : '填写 API Key 后自动获取模型列表' }}</el-text>
           <el-alert v-if="formError" :title="formError" type="error" :closable="false" showIcon />
         </section>
       </el-scrollbar>
@@ -56,10 +56,10 @@ import { IconRefresh } from "@tabler/icons-vue";
 import formCreate, { type Api, type Options } from "../../formCreate";
 import { languageProviders } from "@toonflow/providers";
 import { modelIcon } from "@toonflow/model-icons";
-import logoUrl from "@toonflow/assets/logo.svg";
 import messageMarkdown from "@/components/messageMarkdown.vue";
 import type { Column } from "element-plus";
 import { saveSettings, type CustomProviderModel } from "@/stores/settings";
+import { isTfRouterProvider } from "@/lib/tf";
 
 const visible = defineModel<boolean>({ default: false });
 const selectedProvider = ref<string>(languageProviders[0]?.id ?? "");
@@ -96,6 +96,7 @@ watch(
     modelError.value = "";
     fetching.value = false;
     if (!isVisible || !provider) return;
+    if (isTfRouterProvider(provider)) return;
     if (provider.models.length) {
       models.value = structuredClone(provider.models);
       return;
@@ -151,6 +152,7 @@ async function addProvider() {
     const addedProvider = {
       id: provider.id,
       label: provider.label,
+      icon: provider.icon,
       apiKey,
       apiUrl: "apiUrl" in provider ? provider.apiUrl : "",
       protocol: "protocol" in provider ? provider.protocol : "",
@@ -217,8 +219,10 @@ async function addProvider() {
         height: 18px;
         object-fit: contain;
 
-        .dark & {
-          filter: invert(1);
+        &.monochrome {
+          .dark & {
+            filter: invert(1);
+          }
         }
       }
     }

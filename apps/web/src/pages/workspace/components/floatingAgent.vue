@@ -1,6 +1,7 @@
 <template>
   <teleport to="body">
     <aside
+      v-bind="$attrs"
       v-show="visible"
       id="agentPanel"
       class="floatingAgent"
@@ -53,7 +54,7 @@ const emit = defineEmits<{ resize: [width: number] }>();
 const docked = ref(false);
 const viewport = reactive({ width: window.innerWidth, height: window.innerHeight });
 const gap = computed(() => Math.min(15, viewport.width / 2, viewport.height / 2));
-const maxWidth = computed(() => Math.max(0, viewport.width - (docked.value ? 0 : gap.value * 2)));
+const maxWidth = computed(() => Math.max(0, docked.value ? viewport.width * 0.45 : viewport.width - gap.value * 2));
 const preferredWidth = ref(420);
 const width = computed(() => Math.min(preferredWidth.value, maxWidth.value));
 const preferredHeight = ref<number>();
@@ -72,8 +73,10 @@ const resizeHandles = computed(
           ]),
     ] as { edge: ResizeEdge; label: string }[]
 );
-const left = ref(viewport.width - width.value - gap.value);
-const top = ref(viewport.height - height.value - gap.value);
+const right = ref(15);
+const bottom = ref(15);
+const left = computed(() => Math.max(gap.value, Math.min(viewport.width - width.value - right.value, viewport.width - gap.value - width.value)));
+const top = computed(() => Math.max(gap.value, Math.min(viewport.height - height.value - bottom.value, viewport.height - gap.value - height.value)));
 const panelStyle = computed(() => ({
   left: `${docked.value ? viewport.width - width.value : left.value}px`,
   top: `${docked.value ? 0 : top.value}px`,
@@ -95,8 +98,8 @@ const interaction = shallowRef<{
 type ResizeEdge = "left" | "right" | "bottom";
 
 function movePanel(x: number, y: number) {
-  left.value = Math.max(gap.value, Math.min(x, viewport.width - gap.value - width.value));
-  top.value = Math.max(gap.value, Math.min(y, viewport.height - gap.value - height.value));
+  right.value = viewport.width - width.value - Math.max(gap.value, Math.min(x, viewport.width - gap.value - width.value));
+  bottom.value = viewport.height - height.value - Math.max(gap.value, Math.min(y, viewport.height - gap.value - height.value));
 }
 
 function resizeAnchor(edge: ResizeEdge) {
@@ -110,11 +113,13 @@ function resizeLimit(edge: ResizeEdge, anchor = resizeAnchor(edge)) {
 }
 
 function resizePanel(edge: ResizeEdge, value: number, anchor = resizeAnchor(edge)) {
+  const x = left.value;
+  const y = top.value;
   const limit = resizeLimit(edge, anchor);
   const size = Math.min(limit, Math.max(Math.min(edge === "bottom" ? 240 : 320, limit), value));
   if (edge === "bottom") preferredHeight.value = size;
   else preferredWidth.value = size;
-  if (!docked.value && edge === "left") movePanel(anchor - width.value, top.value);
+  if (!docked.value) movePanel(edge === "left" ? anchor - width.value : edge === "right" ? anchor : x, edge === "bottom" ? anchor : y);
 }
 
 function resizeWithKeyboard(event: KeyboardEvent, edge: ResizeEdge) {
@@ -175,13 +180,6 @@ function resizeViewport() {
 }
 
 watch([visible, docked], () => stopInteraction());
-watch(
-  [width, height, () => viewport.width, () => viewport.height, docked],
-  () => {
-    if (!docked.value) movePanel(left.value, top.value);
-  },
-  { flush: "sync" }
-);
 watch(
   () => (visible.value && docked.value ? width.value : 0),
   (value) => emit("resize", value),

@@ -18,6 +18,7 @@
             :key="treeVersion"
             class="tree"
             :data="[treeRoot]"
+            :icon="IconChevronRight"
             nodeKey="key"
             :props="{ label: 'label', children: 'children' }"
             defaultExpandAll
@@ -28,10 +29,10 @@
             :allowDrop="allowDrop"
             @nodeClick="handleNodeClick"
             @nodeDrop="handleNodeDrop">
-            <template #default="{ data }">
+            <template #default="{ data, node }">
               <span class="treeItem">
-                <icon-folder v-if="data.type === 'directory'" :size="15" aria-hidden="true" />
-                <icon-file v-else :size="15" aria-hidden="true" />
+                <component v-if="data.type === 'directory'" :is="node.expanded && !node.isLeaf ? IconFolderOpen : IconFolder" :size="18" aria-hidden="true" />
+                <icon-file v-else :size="18" aria-hidden="true" />
                 <span class="treeLabel">{{ data.label }}</span>
                 <span v-if="dirtyPaths.has(data.key)" class="dirtyMark" aria-hidden="true">●</span>
               </span>
@@ -66,7 +67,7 @@
 import axios from "axios";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { IconFile, IconFilePlus, IconFolder } from "@tabler/icons-vue";
+import { IconChevronRight, IconFile, IconFilePlus, IconFolder, IconFolderOpen } from "@tabler/icons-vue";
 import type { Plugin } from "./types";
 
 interface TreeNode {

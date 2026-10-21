@@ -1,11 +1,12 @@
-import { constants } from "node:fs";
-import { copyFile, mkdir, stat, unlink } from "node:fs/promises";
+import { t } from "@/lib/i18n";
+import { constants, copyFile, mkdir, stat, unlink } from "@toonflow/file";
 import { extname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { AgentMention } from "@/agent/runtime/types";
 import { getAssetsDirectory } from "@/utils/assets";
 import { lockWorkspaceFiles, resolveWorkspacePath } from "@/utils/workspace/files";
+import { getReadableFileExtension } from "@/lib/documentFormats";
 
 const mediaTypes = new Set(["IMAGE", "MASK", "VIDEO", "AUDIO", "FILE"]);
 const mediaValueSchema = z.strictObject({ url: z.string().min(1).max(4096), mimeType: z.string().min(1).max(128).regex(/^[\w.+-]+\/[\w.+-]+$/) });
@@ -87,10 +88,11 @@ export async function snapshotMentions(cwd: string, mentions: AgentMention[], sa
         const info = await stat(source);
         if (!info.isFile() || !info.size || info.size > 100 * 1024 * 1024) throw new Error("须为非空且不超过 100 MB 的文件");
       } catch (error) {
-        throw Object.assign(new Error(`引用「${mention.label}」不可用：${error instanceof Error ? error.message : "文件读取失败"}`), { status: 400 });
+        throw Object.assign(new Error(t`引用「${mention.label}」不可用：${error instanceof Error ? error.message : "文件读取失败"}`), { status: 400 });
       }
       if (!media || previous) { result.push(mention); continue; }
-      const extension = extname(source);
+      const documentExtension = mention.dataType === "FILE" ? getReadableFileExtension(source, media.mimeType) : undefined;
+      const extension = documentExtension ? `.${documentExtension}` : extname(source);
       const path = `assets/chat/${crypto.randomUUID()}${/^\.[a-zA-Z0-9]{1,16}$/.test(extension) ? extension.toLowerCase() : ""}`;
       const folder = await resolveWorkspacePath(cwd, "assets/chat", true);
       const target = await resolveWorkspacePath(cwd, path, true);
@@ -101,7 +103,7 @@ export async function snapshotMentions(cwd: string, mentions: AgentMention[], sa
         created.push(target.path);
         signal?.throwIfAborted();
         const info = await stat(target.path);
-        if (!info.size || info.size > 100 * 1024 * 1024) throw new Error(`引用「${mention.label}」复制后为空或超过 100 MB`);
+        if (!info.size || info.size > 100 * 1024 * 1024) throw new Error(t`引用「${mention.label}」复制后为空或超过 100 MB`);
       } finally { release(); }
       result.push({ ...mention, value: { url: path, mimeType: media.mimeType } });
     }

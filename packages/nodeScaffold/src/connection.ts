@@ -2,7 +2,7 @@ import type { ValidConnectionFunc } from "@vue-flow/core";
 import type { NodeOutputs } from "./values";
 
 export type NodeDataType = "STRING" | "INT" | "FLOAT" | "BOOLEAN" | "IMAGE" | "MASK" | "LATENT"
-  | "AUDIO" | "VIDEO" | "MODEL" | "CLIP" | "VAE" | "CONDITIONING" | "*" | (string & {});
+  | "AUDIO" | "VIDEO" | "FILE" | "MODEL" | "CLIP" | "VAE" | "CONDITIONING" | "*" | (string & {});
 
 export type NodeHandle = {
   id: string;

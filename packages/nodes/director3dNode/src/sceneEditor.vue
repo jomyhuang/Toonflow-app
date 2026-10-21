@@ -133,7 +133,7 @@
               <icon-camera v-else :size="22" />
               <span>{{ String(index + 1).padStart(2, "0") }}</span>
             </button>
-            <el-button class="removeReference" :icon="IconX" text circle :aria-label="'删除关键帧 ' + (index + 1)" @click="removeAnchor(anchor.id)" />
+            <el-button class="removeReference" :icon="IconTrash" text circle :aria-label="'删除关键帧 ' + (index + 1)" @click="removeAnchor(anchor.id)" />
             <el-button class="exportReference" :icon="IconPhotoPlus" text circle size="small" title="导出画布" :disabled="!ready || !!exportingImage" :loading="exportingImage === anchor.id" :aria-label="'导出关键帧 ' + (index + 1) + ' 到画布'" @click="emit('exportImage', anchor, sceneAspect, anchor.time ?? currentTime)" />
           </div>
         </vue-draggable>
@@ -163,7 +163,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElButton, ElDialog, ElMessage, ElSlider, ElSelect, ElOption, ElPopover, ElSwitch, ElColorPicker, ElInputNumber } from "element-plus";
-import { IconCube3dSphere, IconCamera, IconLoader2, IconPlayerPause, IconPlayerPlay, IconPlus, IconX, IconMovie, IconPhotoPlus, IconSun, IconSettings, IconUserPlus } from "@tabler/icons-vue";
+import { IconCube3dSphere, IconCamera, IconLoader2, IconPlayerPause, IconPlayerPlay, IconPlus, IconTrash, IconMovie, IconPhotoPlus, IconSun, IconSettings, IconUserPlus } from "@tabler/icons-vue";
 import directorPanel from "./directorPanel.vue";
 import directorTour from "./directorTour.vue";
 import lightDirection from "./lightDirection.vue";

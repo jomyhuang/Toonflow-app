@@ -22,11 +22,12 @@
     :hideTimeout="0"
     :hideOnClick="false"
     @command="handleCommand"
-    @visibleChange="(visible: boolean) => !visible && clearConnection()">
+    @visibleChange="onMenuVisibleChange">
     <template #dropdown>
       <el-dropdown-menu
         ref="menuList"
         class="nodeMenu"
+        @focus.self="menuLevel === 'nodes' && nodeMenuItemsRef?.focusFirst()"
         :aria-label="menuLevel === 'selection' ? '选区操作' : menuLevel === 'arrange' ? '整理选中节点' : menuLevel === 'actions' ? '操作菜单' : '添加节点'">
         <template v-if="menuLevel === 'selection'">
           <el-dropdown-item command="duplicateSelection" :icon="IconCopyPlus" :disabled="selectionBusy || deleting || !selectedNodes.length">
@@ -61,16 +62,23 @@
           <el-dropdown-item command="redo" :icon="IconArrowForwardUp" :disabled="!canRedo">重做</el-dropdown-item>
           <el-divider />
           <el-dropdown-item command="paste" :icon="IconClipboard" :disabled="!pasteNode || pasting">
-            {{ pasting ? "粘贴中…" : "从剪切板粘贴" }}
+            {{ pasting ? "粘贴中…" : "粘贴" }}
           </el-dropdown-item>
         </template>
         <template v-else>
           <el-dropdown-item v-if="!directNodes" command="actions" :icon="IconChevronLeft">返回操作菜单</el-dropdown-item>
           <el-dropdown-item v-else disabled>添加节点</el-dropdown-item>
-          <el-dropdown-item v-for="node in filteredNodes" :key="node.type" :command="node.type" :icon="node.icon">
-            {{ node.label }}
-          </el-dropdown-item>
-          <el-dropdown-item v-if="(pendingHandle || pendingGroup.length) && !filteredNodes.length" disabled>没有可连接的节点</el-dropdown-item>
+          <el-dropdown-item v-if="!menuItems.length" disabled>{{ pendingHandle || pendingGroup.length ? "没有可连接的节点" : "没有可显示的节点" }}</el-dropdown-item>
+          <nodeMenuItems
+            v-if="menuVisible"
+            ref="nodeMenuItemsRef"
+            :items="menuItems"
+            :nodes="filteredNodes"
+            :appendTo="menuContainer"
+            :uploadDisabled="!uploadFiles"
+            @select="handleCommand"
+            @upload="handleCommand('upload')"
+            @close="menu?.handleClose()" />
         </template>
       </el-dropdown-menu>
     </template>
@@ -84,6 +92,9 @@ import { isTypeCompatible, useNodeEvent, validateConnection, type NodeHandle } f
 import { ElMessage } from "element-plus";
 import type { DropdownInstance } from "element-plus";
 import selectionHandle from "./selectionHandle.vue";
+import nodeMenuItems from "./nodeMenuItems.vue";
+import { generalSettings } from "@/stores/settings";
+import { filterNodeMenu, resolveNodeMenu } from "@toonflow/server/nodeMenu";
 import { getSelectionConnections } from "../selectionConnections";
 import { getSelectionRoots, getSelectionTree } from "../selectionNodes";
 import { arrangeSelection } from "../arrangeSelection";
@@ -115,6 +126,9 @@ const { remoteNodes = [], pasteNode, uploadFiles, canUndo = false, canRedo = fal
 const emit = defineEmits<{ history: []; undo: []; redo: []; duplicateSelection: [] }>();
 const menu = ref<DropdownInstance>();
 const menuList = ref<{ $el: HTMLElement }>();
+const menuVisible = ref(false);
+const nodeMenuItemsRef = ref<InstanceType<typeof nodeMenuItems>>();
+const menuContainer = computed(() => menuList.value?.$el.closest<HTMLElement>(".el-dropdown__popper") ?? undefined);
 const menuLevel = ref<"actions" | "nodes" | "selection" | "arrange">("actions");
 const selectedNodes = shallowRef<GraphNode[]>([]);
 const deleting = ref(false);
@@ -138,12 +152,11 @@ const canArrangeSelection = computed(() => {
       && Number.isFinite(node.dimensions.width) && node.dimensions.width > 0
       && Number.isFinite(node.dimensions.height) && node.dimensions.height > 0);
 });
-const nodeOrder: Record<string, number> = { "remote-textNode": 0, "remote-imageNode": 1, "remote-videoNode": 2, "remote-audioNode": 3 };
 const filteredNodes = computed(() => {
   const nodes = remoteNodes.map(node => ({
     ...node,
     icon: (flow.nodeTypes?.value?.[node.type] as { icon?: Component } | undefined)?.icon ?? IconBox,
-  })).sort((left, right) => (nodeOrder[left.type] ?? 4) - (nodeOrder[right.type] ?? 4));
+  }));
   if (pendingGroup.value.length) {
     if (!flow.nodesConnectable.value || pendingGroup.value.some(node => flow.findNode(node.id) !== node || node.connectable === false)) return [];
     return nodes.filter(node => {
@@ -162,6 +175,18 @@ const filteredNodes = computed(() => {
     return handles?.some((item) => item.type !== port.type && isTypeCompatible(port.dataType, item.dataType));
   });
 });
+
+const menuItems = computed(() => filterNodeMenu(
+  resolveNodeMenu(generalSettings.value.nodeMenu, remoteNodes),
+  new Set(filteredNodes.value.map(node => node.type)),
+));
+
+async function onMenuVisibleChange(visible: boolean) {
+  menuVisible.value = visible;
+  if (!visible) return clearConnection();
+  await nextTick();
+  if (menuLevel.value === "nodes") nodeMenuItemsRef.value?.focusFirst();
+}
 
 function clearSelectionHandles() {
   selectionHandleRef.value?.clear();
@@ -239,14 +264,22 @@ flow.onNodeContextMenu(() => {
   clearConnection();
   menu.value?.handleClose();
 });
-defineExpose({ openMenu, deleteSelection });
+defineExpose({ openMenu, deleteSelection, addNode });
+
+async function addNode(type: string, position: { x: number; y: number }) {
+  clearConnection();
+  emit("history");
+  nodePosition = { ...position };
+  await handleCommand(type);
+}
 
 async function handleCommand(command: unknown) {
   if (command === "nodes" || command === "actions" || command === "selection" || command === "arrange") {
     if (command === "arrange" && !canArrangeSelection.value) return;
     menuLevel.value = command;
     await nextTick();
-    menuList.value?.$el.focus();
+    if (command === "nodes") nodeMenuItemsRef.value?.focusFirst();
+    else menuList.value?.$el.focus();
     return;
   }
   if (command === "duplicateSelection") {

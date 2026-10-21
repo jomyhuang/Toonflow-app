@@ -1,6 +1,8 @@
 import { $ } from "bun";
-import { existsSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, realpathSync, rmSync } from "@toonflow/file";
+import { dirname, resolve } from "node:path";
+import copyDocumentPackages from "../../server/scripts/copyDocumentPackages";
+import prepareMacDmg from "./macDmg";
 
 const projectDir = resolve(import.meta.dir, "../../..");
 const mode = process.argv[2];
@@ -37,6 +39,7 @@ if (!isMac) {
   const protocolDir = resolve(projectDir, "build/desktop/protocol");
   const csc = resolve(process.env.WINDIR!, "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
   mkdirSync(protocolDir, { recursive: true });
+  await $`${csc} /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /out:${resolve(protocolDir, "startupLauncher.exe")} ${resolve(projectDir, "apps/desktop/native/startupLauncher.cs")}`;
   await $`${csc} /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /out:${resolve(protocolDir, "protocolLauncher.exe")} ${resolve(projectDir, "apps/desktop/native/protocolLauncher.cs")}`;
   await $`${csc} /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /out:${resolve(protocolDir, "saveFileDialog.exe")} ${resolve(projectDir, "apps/desktop/native/saveFileDialog.cs")}`;
   await $`${csc} /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Web.Extensions.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll /out:${resolve(protocolDir, "updateHelper.exe")} ${resolve(projectDir, "apps/desktop/native/updateHelper.cs")}`;
@@ -45,18 +48,26 @@ if (!isMac) {
 for (const script of mode === "dev" ? ["dev:plugins"] : [
   "build:tools",
   "build:nodes",
+  "build:ext",
   // "build:teams",
 ]) {
   await $`${process.execPath} run ${script}`.cwd(projectDir);
 }
 await $`${process.execPath} run --filter @toonflow/web build`.cwd(projectDir);
 await $`${process.execPath} run --filter @toonflow/mcp build`.cwd(projectDir);
+const agentDirectory = dirname(realpathSync(Bun.resolveSync("@earendil-works/pi-coding-agent", resolve(projectDir, "apps/server"))));
+const photonDirectory = dirname(Bun.resolveSync("@silvia-odwyer/photon-node", agentDirectory));
+const photonOutput = resolve(projectDir, "build/desktop/photon");
+rmSync(photonOutput, { recursive: true, force: true });
+cpSync(photonDirectory, photonOutput, { recursive: true });
+await copyDocumentPackages(resolve(projectDir, "build/desktop/node_modules"));
 if (isIntelMac) {
   // ACT: 共用插件和 Web 构建；Intel Mac 仅将 SDK 适配交给独立的 1.18.1。
   await $`${process.execPath} ${resolve(projectDir, "compat/macIntel/build.ts")} ${mode === "package" ? "build" : mode}`.cwd(projectDir);
   process.exit(0);
 }
 const cli = resolve(projectDir, "apps/desktop/node_modules/electrobun/bin/electrobun.cjs");
+if (isMac && mode !== "dev") await prepareMacDmg();
 await $`${process.execPath} ${cli} ${mode === "dev" ? "dev" : "build"} ${mode === "dev" ? [] : ["--env=stable"]}`.cwd(projectDir);
 if (mode === "package" && !isMac) {
   await $`${process.execPath} ${resolve(import.meta.dir, "packageWindows.ts")}`.cwd(projectDir);

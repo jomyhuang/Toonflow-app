@@ -1,6 +1,6 @@
 # 开发与扩展指南
 
-[返回 Toonflow 首页](../README.md) · [贡献指南](../CONTRIBUTING.md) · [开发规范](../AGENTS.md)
+[返回 Toonflow 首页](../README.md) · [文档目录](./readme.md) · [贡献指南](../CONTRIBUTING.md) · [开发规范](../AGENTS.md)
 
 本文收录插件开发、源码运行、桌面打包和更新发布的详细说明。首次参与开发，可先阅读贡献指南。
 
@@ -100,8 +100,15 @@ bun run dev
 | `bun run package:desktop` | 生成当前平台的 Windows NSIS 安装包或 macOS DMG。 |
 | `bun run release:desktop <版本号> --auto` | 生成当前平台安装包、完整更新包，并在存在上一版时生成 patch。 |
 | `bun run typecheck` | 单独执行各工作区的类型检查。 |
+| `bun run --cwd packages/i18n extract` | 手动抽取中文源文案和来源索引，不生成其他语言的译文。 |
 
 构建与类型检查分别执行。新增、移动或删除业务接口后，在 `apps/server` 执行 `bun run routes` 生成路由。
+
+### 多语言维护
+
+语言字典与翻译运行时集中在 [`packages/i18n`](../packages/i18n/readme.md)。Web 的明确展示位置由 Vite 插件在编译时转换，业务源码可继续使用中文；动态文案使用 `t` / `msg` 标签模板。服务端使用请求语言上下文，避免并发请求之间串语言。
+
+修改中文文案后，手动执行上面的 `extract` 命令，再补齐 `packages/i18n/src/locales/` 中各语言的同名键，保留占位符。开发启动和构建不会自动抽取，也不会自动生成译文。翻译仅用于显示，不改变用户数据、模型正文或业务判断值；供应商、tools、nodes、节点脚手架子包及安装器不在翻译范围内。具体用法、语言回退规则和验证记录见[多语言维护说明](../packages/i18n/readme.md)。
 
 <details>
 <summary><strong>在本机运行构建后的 Web 与 Server</strong></summary>
@@ -287,6 +294,7 @@ apps/
   updateServer/        独立更新文件服务器与发布脚本
 packages/
   assets/              共享图片与图标
+  i18n/                多语言字典、运行时与文案抽取
   nodes/               内置画布节点
   nodeScaffold/        节点开发脚手架与运行时
   tools/               Agent 工具插件
@@ -296,6 +304,7 @@ packages/
   mcp/                 MCP 服务与协议适配
   ffmpeg/              FFmpeg 能力
   startup/             原生启动窗口与动画
+docs/                  项目介绍译版、开发文档与图片
 compat/macIntel/       Intel Mac 兼容构建
 build/                 构建产物
 data/                  本机运行数据，不提交到仓库

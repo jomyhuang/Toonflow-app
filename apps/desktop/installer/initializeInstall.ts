@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { copyFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, rmSync, writeAtomicSync } from "@toonflow/file";
+import { file } from "@toonflow/file/bun";
 import { basename, isAbsolute, join } from "node:path";
 
 const directories = process.argv.slice(2);
@@ -8,7 +9,7 @@ if (directories.length !== 3 || directories.some(directory => !isAbsolute(direct
 }
 const [installDirectory, desktopDirectory, programsDirectory] = directories as [string, string, string];
 const resourcesDirectory = join(installDirectory, "app", "Resources");
-const { identifier, name, channel } = await Bun.file(join(resourcesDirectory, "version.json")).json();
+const { identifier, name, channel } = await file(join(resourcesDirectory, "version.json")).json();
 if (typeof identifier !== "string" || typeof name !== "string" || channel !== "stable") {
   throw new Error("应用安装信息无效，请重新构建安装包。");
 }
@@ -16,7 +17,7 @@ if (typeof identifier !== "string" || typeof name !== "string" || channel !== "s
 // ACT: 系统注册由 NSIS 负责；补齐 Electrobun 2.0.1 的记录，避免首次启动再次调用 PowerShell。
 // 保留真实更新助手和完整 manifest，不用占位文件跳过 SDK 检查。
 copyFileSync(join(resourcesDirectory, "uninstall"), join(installDirectory, "uninstall.exe"));
-writeFileSync(join(installDirectory, ".electrobun-uninstall.json"), JSON.stringify({
+writeAtomicSync(join(installDirectory, ".electrobun-uninstall.json"), JSON.stringify({
   schema_version: 1,
   install_nonce: randomUUID().replaceAll("-", ""),
   identifier,
@@ -28,7 +29,7 @@ writeFileSync(join(installDirectory, ".electrobun-uninstall.json"), JSON.stringi
   data_path_versions: [1],
 }, null, 2));
 
-// 重装同一构建也重新同步内置节点和工具；供应商、技能沿用首次初始化，保留用户修改。
-for (const directory of ["nodes", "tools"]) {
+// 重装同一构建也重新同步内置节点、工具和供应商；技能沿用首次初始化，保留用户修改。
+for (const directory of ["nodes", "tools", "providers"]) {
   rmSync(join(installDirectory, "data", directory, "initialized"), { force: true });
 }

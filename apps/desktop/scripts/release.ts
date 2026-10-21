@@ -1,5 +1,6 @@
 import { $ } from "bun";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "@toonflow/file";
+import { file } from "@toonflow/file/bun";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import desktopConfig from "../../../electrobun.config";
@@ -82,7 +83,7 @@ await $`${process.execPath} run package:desktop`
   .env({ ...process.env, appVersion: version, generateUpdatePatch: initial ? "0" : "1" });
 
 // ACT: 本机 SDK 产物直接读取，完整清单校验仅用于远程基线。
-const manifest = await Bun.file(join(artifactDir, manifestName)).json();
+const manifest = await file(join(artifactDir, manifestName)).json();
 if (manifest.version !== version) {
   throw new Error("本次构建的更新 JSON 与请求版本不一致。");
 }

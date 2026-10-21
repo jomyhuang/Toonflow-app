@@ -6,7 +6,7 @@
         <el-skeleton v-if="loading && !balance" animated>
           <template #template><el-skeleton-item class="balancePlaceholder" variant="text" /></template>
         </el-skeleton>
-        <strong v-else class="balanceNumber">{{ balance ? numberFormat.format(balance.balance) : "—" }}</strong>
+        <strong v-else class="balanceNumber">{{ balance ? `${numberFormat.format(balance.balance)} ${balance.unit}` : "—" }}</strong>
       </div>
       <div class="accountActions">
         <el-button text circle :icon="IconRefresh" :loading="loading" :disabled="!apiKey" aria-label="刷新余额" title="刷新余额" @click="refresh" />
@@ -20,11 +20,12 @@
           v-model="draftKey"
           class="setupInput"
           type="password"
+          dir="ltr"
           showPassword
           placeholder="粘贴 API Key"
           :disabled="saving"
           @keyup.enter="submitKey" />
-        <el-button type="primary" size="small" :loading="saving || fetchingModels" :disabled="!draftKey.trim()" @click="submitKey">保存</el-button>
+        <el-button type="primary" size="small" :loading="saving" :disabled="!draftKey.trim()" @click="submitKey">保存</el-button>
       </div>
       <el-text v-if="setupError" size="small" type="danger">{{ setupError }}</el-text>
       <el-button tag="a" href="https://api.toonflow.net/" target="_blank" rel="noopener noreferrer" text type="primary" :icon="IconExternalLink">
@@ -36,17 +37,17 @@
       <el-button text size="small" :disabled="loading" @click="refresh">重试</el-button>
     </div>
     <div v-if="balance" class="accountDetails">
-      <div class="accountMetric">
+      <div v-if="balance.keyBalance !== undefined" class="accountMetric">
         <el-text size="small" type="info">密钥余额</el-text>
-        <span>{{ balance.keyBalance === null ? "无限制" : numberFormat.format(balance.keyBalance) }}</span>
+        <span>{{ balance.keyBalance === null ? "无限制" : `${numberFormat.format(balance.keyBalance)} ${balance.unit}` }}</span>
       </div>
-      <div class="accountMetric">
+      <div v-if="balance.totalConsumption !== undefined" class="accountMetric">
         <el-text size="small" type="info">累计消费</el-text>
-        <span>{{ numberFormat.format(balance.totalConsumption) }}</span>
+        <span>{{ numberFormat.format(balance.totalConsumption) }} {{ balance.unit }}</span>
       </div>
-      <div class="accountMetric">
+      <div v-if="balance.totalRecharge !== undefined" class="accountMetric">
         <el-text size="small" type="info">累计充值</el-text>
-        <span>{{ numberFormat.format(balance.totalRecharge) }}</span>
+        <span>{{ numberFormat.format(balance.totalRecharge) }} {{ balance.unit }}</span>
       </div>
     </div>
     <component :is="rechargeDialog" v-model="rechargeVisible" :apiKey="apiKey" />
@@ -54,18 +55,19 @@
 </template>
 
 <script setup lang="ts">
+import { locale } from "@toonflow/i18n/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch, type Component } from "vue";
 import axios from "axios";
 import { IconCreditCard, IconExternalLink, IconRefresh } from "@tabler/icons-vue";
-import tf, { type TfBalance } from "@/lib/tf";
-import type { CustomProvider, CustomProviderModel } from "@/stores/settings";
+import type { ProviderBalance } from "@toonflow/providers";
+import { getProviderBalance, providerBalances } from "@/lib/providerBilling";
 
 const props = withDefaults(defineProps<{
   apiKey: string;
   visible?: boolean;
-  modelProvider?: Pick<CustomProvider, "apiUrl" | "protocol">;
-  saveApiKey: (key: string, models?: CustomProviderModel[]) => Promise<void>;
+  saveApiKey: (key: string) => Promise<void>;
 }>(), { visible: true });
+const emit = defineEmits<{ rechargeVisibleChange: [visible: boolean] }>();
 const rechargeDialog = shallowRef<Component>();
 const rechargeVisible = ref(false);
 const apiKey = computed(() =>
@@ -74,15 +76,16 @@ const apiKey = computed(() =>
     .replace(/^Bearer\s+/i, "")
     .trim()
 );
-const balance = ref<TfBalance>();
+const balance = ref<ProviderBalance>();
+const accountId = ref("");
+const sharedBalance = computed(() => accountId.value ? providerBalances.value.find(entry => entry.accountId === accountId.value)?.balance : undefined);
+watch(sharedBalance, value => { if (value) balance.value = value; });
 const loading = ref(false);
 const errorMessage = ref("");
 const draftKey = ref("");
 const saving = ref(false);
 const setupError = ref("");
-const fetchingModels = ref(false);
-const draftModels = shallowRef<CustomProviderModel[]>();
-const numberFormat = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 2, maximumFractionDigits: 6 });
+const numberFormat = computed(() => new Intl.NumberFormat(locale.value, { maximumFractionDigits: 6 }));
 let controller: AbortController | undefined;
 let rechargeKey = "";
 
@@ -95,11 +98,11 @@ function openRecharge() {
 
 async function submitKey() {
   const key = draftKey.value.trim();
-  if (!key || saving.value || fetchingModels.value) return;
+  if (!key || saving.value) return;
   saving.value = true;
   setupError.value = "";
   try {
-    await props.saveApiKey(key, draftModels.value);
+    await props.saveApiKey(key);
     draftKey.value = "";
   } catch (error) {
     setupError.value = error instanceof Error ? error.message : "保存失败，请重试";
@@ -107,35 +110,6 @@ async function submitKey() {
     saving.value = false;
   }
 }
-
-watch(
-  [draftKey, () => props.visible, () => props.modelProvider?.apiUrl, () => props.modelProvider?.protocol],
-  ([key, visible, apiUrl, protocol], _previous, onCleanup) => {
-    draftModels.value = undefined;
-    fetchingModels.value = false;
-    setupError.value = "";
-    if (!visible || !apiUrl || !protocol || !key.trim()) return;
-    const request = new AbortController();
-    fetchingModels.value = true;
-    const timer = setTimeout(async () => {
-      try {
-        const { data } = await axios.post("/api/providers/models", { apiUrl, protocol, apiKey: key.trim() }, { signal: request.signal, timeout: 35000 });
-        if (request.signal.aborted) return;
-        if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "获取模型列表失败");
-        if (!data.data.length) throw new Error("未获取到可用模型，请检查 API Key 后重试");
-        draftModels.value = data.data;
-      } catch (error) {
-        if (!request.signal.aborted) setupError.value = axios.isAxiosError(error)
-          ? error.response?.data?.message || "获取模型列表失败，请检查 API Key 后重试"
-          : error instanceof Error ? error.message : "获取模型列表失败";
-      } finally {
-        if (!request.signal.aborted) fetchingModels.value = false;
-      }
-    }, 500);
-    onCleanup(() => { clearTimeout(timer); request.abort(); });
-  },
-  { flush: "sync" },
-);
 
 async function refresh() {
   controller?.abort();
@@ -146,8 +120,11 @@ async function refresh() {
   controller = request;
   loading.value = true;
   try {
-    const result = await tf.getBalance({ apiKey: apiKey.value, signal: request.signal });
-    if (!request.signal.aborted) balance.value = result;
+    const result = await getProviderBalance("tfRouter", { apiKey: apiKey.value, signal: request.signal });
+    if (!request.signal.aborted) {
+      accountId.value = result.accountId;
+      balance.value = sharedBalance.value ?? result.balance ?? undefined;
+    }
   } catch (error) {
     if (!request.signal.aborted) {
       errorMessage.value = axios.isAxiosError<{ message?: string }>(error)
@@ -165,6 +142,7 @@ watch(
   [apiKey, () => props.visible],
   () => {
     rechargeVisible.value = false;
+    accountId.value = "";
     balance.value = undefined;
     draftKey.value = "";
     setupError.value = "";
@@ -173,9 +151,13 @@ watch(
   { immediate: true }
 );
 watch(rechargeVisible, (isOpen, wasOpen) => {
+  emit("rechargeVisibleChange", isOpen);
   if (wasOpen && !isOpen && rechargeKey === apiKey.value && props.visible) void refresh();
+}, { flush: "sync" });
+onBeforeUnmount(() => {
+  controller?.abort();
+  emit("rechargeVisibleChange", false);
 });
-onBeforeUnmount(() => controller?.abort());
 </script>
 
 <style lang="scss" scoped>

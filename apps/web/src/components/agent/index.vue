@@ -36,6 +36,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, type ComponentPublicInstance } from "vue";
 import axios from "axios";
+import { translate } from "@toonflow/i18n/vue";
 import { ElMessage } from "element-plus";
 import { useWorkspaceStore } from "@/stores/workspace";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
@@ -50,7 +51,11 @@ type OpenConversation = { key: number; name: string; file?: string; parentFile?:
 const conversations = ref<OpenConversation[]>([]);
 const conversationKey = ref(0);
 const selectedConversation = computed(() => conversations.value.find(item => item.key === conversationKey.value));
-const name = computed(() => selectedConversation.value?.name || "新对话");
+// ACT: 新对话是现有自动命名逻辑使用的保留值；仅翻译显示，不改变存储或比较值。
+const name = computed(() => {
+  const value = selectedConversation.value?.name;
+  return value && value !== "新对话" ? value : translate("新对话");
+});
 const sessionFile = computed(() => selectedConversation.value?.file);
 const workspaceStore = useWorkspaceStore();
 const history = ref<AgentHistory[]>([]);

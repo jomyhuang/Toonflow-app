@@ -5,6 +5,8 @@ import { fromJsonSchema, isInitializeRequest, McpServer, ProtocolError, Protocol
 import type { CallToolResult, ReadResourceResult, Resource } from "@modelcontextprotocol/server";
 import { Router } from "express";
 import type { Request } from "express";
+import type { MessageDescriptor } from "@toonflow/i18n";
+import { detectLocale, msg, translate } from "@toonflow/i18n";
 
 export type { ReadResourceResult, Resource } from "@modelcontextprotocol/server";
 
@@ -18,6 +20,9 @@ export type McpTool = {
 export type McpOptions = {
   getTools(): Promise<McpTool[]>;
   authorize(request: Request): boolean | Promise<boolean>;
+  runInRequest?<T>(request: Request, operation: () => T): T;
+  translate?(message: string | MessageDescriptor): string;
+  translateError?(error: unknown): string;
   resources?: {
     list(signal: AbortSignal): Promise<Resource[]>;
     read(uri: string, signal: AbortSignal): Promise<ReadResourceResult>;
@@ -41,6 +46,9 @@ function toToolResult(value: unknown): CallToolResult {
 }
 
 export function createMcpRouter(options: McpOptions) {
+  const translateMessage = options.translate ?? ((message: string | MessageDescriptor) => translate(message, undefined,
+    detectLocale([Intl.DateTimeFormat().resolvedOptions().locale])));
+  const translateError = options.translateError ?? ((error: unknown) => translateMessage(error instanceof Error ? error.message : String(error)));
   const createServer = () => {
     const resources = options.resources;
     const server = new McpServer({ name: "toonflow", version: "0.0.0" }, {
@@ -54,7 +62,7 @@ export function createMcpRouter(options: McpOptions) {
         try { return await resources.read(request.params.uri, context.mcpReq.signal); }
         catch (error) {
           const failure = error as { status?: number; code?: string } | null;
-          const message = error instanceof Error ? error.message : String(error);
+          const message = translateError(error);
           if (failure?.status === 404 || failure?.code === "ENOENT") throw new ProtocolError(ProtocolErrorCode.ResourceNotFound, message);
           if (failure?.status === 400 || error instanceof URIError) throw new ProtocolError(ProtocolErrorCode.InvalidParams, message);
           throw error;
@@ -67,13 +75,13 @@ export function createMcpRouter(options: McpOptions) {
     }));
     server.server.setRequestHandler("tools/call", async (request, context) => {
       const tool = (await options.getTools()).find(item => item.name === request.params.name);
-      if (!tool) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `工具不存在或已停用：${request.params.name}`);
+      if (!tool) throw new ProtocolError(ProtocolErrorCode.InvalidParams, translateMessage(msg`工具不存在或已停用：${request.params.name}`));
       try {
         const parsed = await fromJsonSchema<Record<string, unknown>>(tool.inputSchema)["~standard"].validate(request.params.arguments ?? {});
         if (parsed.issues) throw new Error(parsed.issues.map(issue => issue.message).join("；"));
         return toToolResult(await tool.execute(parsed.value, context.mcpReq.signal));
       } catch (error) {
-        return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
+        return { isError: true, content: [{ type: "text", text: translateError(error) }] };
       }
     });
     return server;
@@ -81,11 +89,11 @@ export function createMcpRouter(options: McpOptions) {
   // ACT: 使用支持取消通知的 Streamable HTTP 会话；单进程宿主不持久化 MCP 会话。
   const sessions = new Map<string, NodeStreamableHTTPServerTransport>();
   const router = Router();
-  router.use(async (request, response) => {
+  router.use((request, response) => (options.runInRequest ?? ((_request, operation) => operation()))(request, async () => {
     try {
       if (!await options.authorize(request)) {
         response.setHeader("WWW-Authenticate", 'Bearer realm="Toonflow"');
-        response.status(401).json({ jsonrpc: "2.0", id: null, error: { code: -32001, message: "MCP 未开启或访问凭证无效" } });
+        response.status(401).json({ jsonrpc: "2.0", id: null, error: { code: -32001, message: translateMessage("MCP 未开启或访问凭证无效") } });
         return;
       }
       const sessionId = request.get("mcp-session-id");
@@ -101,7 +109,7 @@ export function createMcpRouter(options: McpOptions) {
         await createServer().connect(transport);
       }
       if (!transport) {
-        response.status(sessionId ? 404 : 400).json({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "MCP 会话不存在，请重新连接" } });
+        response.status(sessionId ? 404 : 400).json({ jsonrpc: "2.0", id: null, error: { code: -32000, message: translateMessage("MCP 会话不存在，请重新连接") } });
         return;
       }
       await transport.handleRequest(request, response, request.body);
@@ -110,9 +118,10 @@ export function createMcpRouter(options: McpOptions) {
         response.end();
         return;
       }
-      response.status(500).json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } });
+      console.error(error);
+      response.status(500).json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: translateError(error) } });
     }
-  });
+  }));
   return Object.assign(router, { close: async () => {
     await Promise.all([...sessions.values()].map(transport => transport.close()));
   } });

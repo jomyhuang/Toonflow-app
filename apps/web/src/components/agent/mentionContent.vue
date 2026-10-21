@@ -8,7 +8,10 @@
       <video v-else-if="previewUrl && selected.dataType === 'VIDEO'" :src="previewUrl" controls playsinline preload="metadata" @error="error = '无法预览该视频'" />
       <audio v-else-if="previewUrl && selected.dataType === 'AUDIO'" :src="previewUrl" controls preload="metadata" @error="error = '无法预览该音频'" />
       <p v-else-if="selected.dataType === 'FILE'" class="fileName"><icon-file :size="20" />{{ selected.label }}</p>
-      <pre v-else>{{ textValue }}</pre>
+      <template v-else>
+        <pre>{{ textValue.slice(0, 12000) }}</pre>
+        <p v-if="textValue.length > 12000">…（预览已截取，发送保留完整内容）</p>
+      </template>
       <el-button v-if="removable" text type="danger" @click="removeSelected">移除此引用</el-button>
     </div>
   </el-dialog>
@@ -34,8 +37,7 @@ const loading = ref(false);
 const error = ref("");
 const textValue = computed(() => {
   const value = selected.value?.value;
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? "";
-  return text.length > 12000 ? `${text.slice(0, 12000)}\n…（预览已截取，发送保留完整内容）` : text;
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? "";
 });
 
 function sourceLabel(mention: AgentMention) {

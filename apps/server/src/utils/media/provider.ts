@@ -1,5 +1,7 @@
+import { t, translateMessage, validationOptions } from "@/lib/i18n";
+
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, unlink } from "@toonflow/file";
 import { dirname, join } from "node:path";
 import { createContext, SourceTextModule } from "node:vm";
 import type { AudioConvertOptions, Provider, ProviderTools } from "@toonflow/providers";
@@ -63,6 +65,36 @@ function mediaErrorMessage(value: unknown, config: Record<string, unknown>, dept
     .slice(0, 4000);
 }
 
+function createMediaTools(fetcher: typeof fetch = fetch): ProviderTools["media"] {
+  async function bytes(input: MediaInput) {
+    if (input.type === "base64") return Buffer.from(input.data.replace(/^data:[^;]+;base64,/, ""), "base64");
+    if (input.type === "binary") return Buffer.from(input.data);
+    const response = await fetcher(input.url);
+    if (!response.ok) throw new Error(t`读取图片失败：HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  return {
+    async inspectImage(input: MediaInput) {
+      const metadata = await new Bun.Image(await bytes(input)).metadata();
+      return { width: metadata.width, height: metadata.height, format: metadata.format };
+    },
+    async resizeImage(input, options) {
+      if (!options.width && !options.height) throw new Error("图片缩放至少需要指定宽度或高度");
+      const source = await bytes(input);
+      const metadata = await new Bun.Image(source).metadata();
+      const width = Math.max(1, Math.round(options.width ?? metadata.width * (options.height! / metadata.height)));
+      const height = Math.max(1, Math.round(options.height ?? metadata.height * (options.width! / metadata.width)));
+      const image = new Bun.Image(source).resize(width, height, { fit: "fill" });
+      const format = options.format ?? (metadata.format === "jpeg" || metadata.format === "webp" ? metadata.format : "png");
+      const quality = Math.min(100, Math.max(1, Math.round(options.quality ?? 92)));
+      if (format === "jpeg") image.jpeg({ quality });
+      else if (format === "webp") image.webp({ quality });
+      else image.png();
+      return { type: "binary", data: new Uint8Array(await image.buffer()), mimeType: `image/${format === "jpeg" ? "jpeg" : format}`, name: input.name };
+    },
+  };
+}
 async function responseErrorMessage(response: Response, config: Record<string, unknown>) {
   if (!response.body || !/json|text|^$/i.test(response.headers.get("content-type") ?? "")) return "";
   const reader = response.clone().body!.getReader();
@@ -126,7 +158,7 @@ function parseProvider(source: string) {
   if (Buffer.byteLength(source, "utf8") > 2 * 1024 * 1024) invalid("供应商文件不能超过 2 MB");
   let module: ReturnType<typeof parse>;
   try { module = parse(source, { sourceType: "module", plugins: ["typescript"] }); }
-  catch (err) { return invalid(`供应商 TypeScript 语法错误：${err instanceof Error ? err.message : String(err)}`); }
+  catch (err) { return invalid(t`供应商 TypeScript 语法错误：${err instanceof Error ? err.message : String(err)}`); }
   const exported = module.program.body.find(item => item.type === "ExportDefaultDeclaration");
   if (!exported || exported.type !== "ExportDefaultDeclaration") {
     const legacy = module.program.body.some(item => {
@@ -146,41 +178,52 @@ function parseProvider(source: string) {
   function value(name: string) {
     const property = entries.get(name);
     if (!property) return undefined;
-    if (property.type !== "ObjectProperty" || (property.shorthand && name !== "version")) invalid(`${name} 必须直接使用字面量`);
+    const allowConstant = name === "version" || name === "rules";
+    if (property.type !== "ObjectProperty" || (property.shorthand && !allowConstant)) invalid(t`${name} 必须直接使用字面量`);
     let expression = unwrap(property.value as Expression);
-    if (name === "version" && expression.type === "Identifier") {
+    if (allowConstant && expression.type === "Identifier") {
       const identifier = expression.name;
       const declaration = module.program.body.flatMap(item => item.type === "VariableDeclaration" && item.kind === "const" ? item.declarations : [])
         .find(item => item.id.type === "Identifier" && item.id.name === identifier);
-      if (!declaration?.init) invalid("version 必须使用字符串字面量或顶层 const 字符串常量");
+      if (!declaration?.init) invalid(t`${name} 必须使用字面量或顶层 const 常量`);
       expression = declaration.init;
     }
     return literal(expression);
   }
   const id = value("id");
   const label = value("label");
+  const icon = value("icon");
   const version = value("version");
   const readme = value("readme");
   const modelsUrl = value("modelsUrl");
   if (!providerIdSchema.safeParse(id).success) invalid("供应商 ID 必须为小驼峰文件名");
   if (typeof label !== "string" || !label.trim() || label.length > 200) invalid("供应商名称无效");
+  if (icon !== undefined && typeof icon !== "string") invalid("供应商图标必须为字符串");
   if (version !== undefined && (typeof version !== "string" || !version.trim())) invalid("供应商版本必须为非空字符串");
   if (readme !== undefined && typeof readme !== "string") invalid("供应商说明必须为字符串");
   if (modelsUrl !== undefined && !z.url({ protocol: /^https?$/ }).refine(value => {
     const url = new URL(value);
     return !url.username && !url.password && !url.hash;
   }).safeParse(modelsUrl).success) invalid("模型列表地址须为不含凭据或片段的 HTTP URL");
-  const models = mediaModelsSchema.safeParse(value("models") ?? []);
-  if (!models.success) invalid(models.error.issues.map(issue => issue.message).join("；"));
-  return { object, modelProperty: entries.get("models"), id: id as string, label, version: version?.trim(), readme, modelsUrl: modelsUrl as string | undefined, models: models.data };
+  const models = mediaModelsSchema.safeParse(value("models") ?? [], validationOptions());
+  if (!models.success) invalid(models.error.issues.map(issue => translateMessage(issue.message)).join("; "));
+  const rules = z.array(z.record(z.string(), z.json())).safeParse(value("rules") ?? []);
+  if (!rules.success) invalid("供应商 rules 必须为表单配置对象数组");
+  return { object, modelProperty: entries.get("models"), id: id as string, label, icon, version: version?.trim(), readme, modelsUrl: modelsUrl as string | undefined, rules: rules.data, models: models.data,
+    supportsPrice: entries.has("getPrice") || id === tfRouter.id, supportsBalance: entries.has("getBalance") || id === tfRouter.id };
 }
 
 function metadata(fileName: string, source: string) {
-  const { id, label, version, readme, modelsUrl, models } = parseProvider(source);
+  const { id, label, icon, version, readme, modelsUrl, rules, models, supportsPrice, supportsBalance } = parseProvider(source);
   if (fileName !== `${id}.ts`) invalid("供应商 ID 与文件名不一致");
-  // ACT: 旧 TF-Router 文件不会随应用覆盖，缺少列表地址时使用内置定义。
-  return { fileName, id, label, version, readme, modelsUrl: modelsUrl ?? (id === tfRouter.id ? tfRouter.modelsUrl : undefined), models,
-    revision: createHash("sha256").update(source).digest("hex"), loadError: "" };
+  // ACT: 兼容旧 TF-Router 文件，缺少列表地址时使用内置定义。
+  return { fileName, id, label, icon, version, readme, modelsUrl: modelsUrl ?? (id === tfRouter.id ? tfRouter.modelsUrl : undefined), rules, models,
+    supportsPrice, supportsBalance, revision: createHash("sha256").update(source).digest("hex"), loadError: "" };
+}
+
+export function validateMediaProviderSource(source: string) {
+  const { id } = parseProvider(source);
+  return metadata(`${id}.ts`, source);
 }
 
 async function directory(create = false) {
@@ -228,20 +271,19 @@ export async function listMediaProviders() {
       } catch (error) {
         // ACT: 元数据损坏不影响其他供应商；仍保留原文版本，允许用户明确删除。
         const { source, ...file } = current;
-        return { ...file, label: current.id, version: "", readme: "", models: [], loadError: error instanceof Error ? error.message : "供应商文件无法读取" };
+        return { ...file, label: current.id, version: "", readme: "", rules: [], models: [], loadError: translateMessage(error instanceof Error ? error.message : "供应商文件无法读取") };
       }
     }));
 }
 
 export async function addMediaProvider(source: string) {
-  const { id } = parseProvider(source);
-  const fileName = `${id}.ts`;
-  const result = metadata(fileName, source);
+  const result = validateMediaProviderSource(source);
+  const { fileName } = result;
   const path = join((await directory(true))!, fileName);
   const release = lockWorkspaceFiles([path]);
   try { await writeWorkspaceFile(path, source, true); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") invalid(`媒体供应商“${result.label}”已安装，请在「设置 → 媒体模型」中编辑，或先删除后重新安装。`, 409);
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") invalid(t`媒体供应商“${result.label}”已安装，请在「设置 → 媒体模型」中编辑，或先删除后重新安装。`, 409);
     throw error;
   }
   finally { release(); }
@@ -250,8 +292,8 @@ export async function addMediaProvider(source: string) {
 
 export async function saveMediaProvider(fileName: string, models: z.infer<typeof mediaModelsSchema>, revision: string, expectedApiKey?: string) {
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
-  const checked = mediaModelsSchema.safeParse(models);
-  if (!checked.success) invalid(checked.error.issues.map(issue => issue.message).join("；"));
+  const checked = mediaModelsSchema.safeParse(models, validationOptions());
+  if (!checked.success) invalid(checked.error.issues.map(issue => translateMessage(issue.message)).join("; "));
   const path = await directory();
   if (!path) invalid("供应商文件不存在", 404);
   const release = lockWorkspaceFiles([join(path, fileName)]);
@@ -278,30 +320,48 @@ export function getMediaProviderApiKey(id: string) {
   return typeof value === "string" ? value.trim().replace(/^Bearer(?:\s+|$)/i, "").trim() : "";
 }
 
-export async function refreshMediaProviderModels(fileName: string, revision?: string) {
+export async function refreshMediaProviderModels(fileName: string, revision?: string, modelType?: ModelType, expectedApiKey?: string) {
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
   const provider = await getMediaProvider(fileName.slice(0, -3));
   if (revision !== undefined && revision !== provider.revision) invalid("供应商文件已被修改，请刷新页面后再获取", 409);
   if (!provider.modelsUrl) invalid("供应商未配置 modelsUrl");
   const apiKey = getMediaProviderApiKey(provider.id);
-  const response = await fetch(provider.modelsUrl, {
-    headers: { Accept: "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-    signal: AbortSignal.timeout(30000), redirect: "error",
-  });
-  if (!response.ok) throw new Error(`获取媒体模型列表失败（HTTP ${response.status}）`);
-  const result = z.object({ data: z.array(mediaModelsSchema.element.partial({ label: true, type: true })).max(2000) }).parse(await response.json());
-  if (!result.data.length) throw new Error("未获取到媒体模型，保留原有列表");
-  const requestedType = z.enum(["text", "image", "video", "audio"]).safeParse(new URL(provider.modelsUrl).searchParams.get("type"));
-  const models = result.data.map(model => {
-    const id = model.id.trim();
-    const previous = provider.models.find(item => item.id === id)
-      ?? (provider.id === tfRouter.id ? tfRouter.models.find(item => item.id === id) : undefined);
-    const type = model.type ?? (requestedType.success ? requestedType.data : previous?.type);
-    if (!type) invalid(`模型 ${id} 缺少 type，请在返回数据或 modelsUrl 的 type 参数中指定`);
-    // ACT: 只有 ID 的列表沿用同名模型参数，新模型不猜测生成能力。
-    return { ...previous, ...model, id, label: model.label ?? previous?.label
-      ?? (typeof model.display_name === "string" ? model.display_name : typeof model.displayName === "string" ? model.displayName : id), type };
-  });
+  if (expectedApiKey !== undefined && apiKey !== expectedApiKey) invalid("供应商配置已变更，请重试", 409);
+  const modelTypes = provider.id === tfRouter.id && !modelType ? ["video", "image", "audio"] : [modelType];
+  // ACT: 各类型只并行获取，汇总后保存一次，避免同一供应商文件发生版本冲突。
+  const models = (await Promise.all(modelTypes.map(async requestedModelType => {
+    const modelsUrl = new URL(provider.modelsUrl!);
+    if (requestedModelType) modelsUrl.searchParams.set("type", requestedModelType);
+    const response = await fetch(modelsUrl, {
+      headers: { Accept: "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      signal: AbortSignal.timeout(30000), redirect: "error",
+    });
+    if (!response.ok) throw new Error(t`获取媒体模型列表失败（HTTP ${response.status}）`);
+    const result = z.object({ data: z.array(mediaModelsSchema.element.partial({ label: true, type: true }).extend({
+      modelInfo: z.object({
+        mode: z.array(z.union([z.string().min(1), z.array(z.string().min(1))])).optional(),
+        audio: z.union([z.literal("optional"), z.boolean()]).optional(),
+        durationResolutionMap: z.array(z.object({ duration: z.array(z.number().positive()), resolution: z.array(z.string().min(1)) })).optional(),
+        imageSizes: z.array(z.string().min(1)).optional(),
+        imageRatios: z.array(z.string().min(1)).optional(),
+      }).catchall(z.json()).optional(),
+    })).max(2000) }).parse(await response.json());
+    if (!result.data.length) throw new Error("未获取到媒体模型，保留原有列表");
+    const requestedType = z.enum(["text", "image", "video", "audio"]).safeParse(modelsUrl.searchParams.get("type"));
+    return result.data.map(({ modelInfo, ...model }) => {
+      const id = model.id.trim();
+      const previous = provider.models.find(item => item.id === id)
+        ?? (provider.id === tfRouter.id ? tfRouter.models.find(item => item.id === id) : undefined);
+      const type = model.type ?? (requestedType.success ? requestedType.data : previous?.type);
+      if (!type) invalid(t`模型 ${id} 缺少 type，请在返回数据或 modelsUrl 的 type 参数中指定`);
+      if (requestedType.success && type !== requestedType.data) invalid(t`模型 ${id} 的 type 与请求类型不一致`);
+      // ACT: modelInfo 覆盖已有能力；缺省字段沿用同名配置，新模型不猜测生成能力。
+      const merged = { ...previous, ...model, ...modelInfo, id, label: model.label ?? previous?.label
+        ?? (typeof model.display_name === "string" ? model.display_name : typeof model.displayName === "string" ? model.displayName : id), type };
+      Reflect.deleteProperty(merged, "modelInfo");
+      return merged;
+    });
+  }))).flat();
   const types = new Set(models.map(model => model.type));
   return saveMediaProvider(fileName, [...provider.models.filter(model => !types.has(model.type)), ...models], provider.revision, apiKey);
 }
@@ -338,10 +398,18 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   await module.evaluate({ timeout: 1000 });
   signal?.throwIfAborted();
   const definition = (module.namespace as { default: Provider }).default;
+  // ACT: 已安装 TF-Router 仅补齐缺省查询能力，保留用户适配代码与模型列表。
+  if (id === tfRouter.id) {
+    definition.getPrice ??= tfRouter.getPrice;
+    definition.getBalance ??= tfRouter.getBalance;
+  }
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
   const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
   const provider = {
     ...definition,
+    // 查询上下文使用原始注入 fetch，避免继承某次生成请求的取消信号。
+    queryFetch: fetchRequest,
+    sourceRevision: createHash("sha256").update(source).digest("hex"),
     config: providerConfig,
     signal,
     tool: {
@@ -353,6 +421,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       hash: Bun.hash,
       errorMessage: (value: unknown) => mediaErrorMessage(value, providerConfig),
       image: Bun.Image,
+      media: createMediaTools(fetchRequest),
       audio: { convert: (input: Uint8Array, options: AudioConvertOptions) => convertAudio(input, options, signal) },
       ffmpeg: async () => {
         if (!cwd) throw new Error("当前操作没有工作目录，无法使用 FFmpeg");
@@ -360,10 +429,13 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       },
     } satisfies ProviderTools,
   };
-  for (const name of ["generateImage", "generateVideo", "generateAudio"] as const) {
-    const generate = definition[name];
+  for (const [name, generate] of [
+    ["generateImage", definition.generateImage],
+    ["generateVideo", definition.generateVideo],
+    ["generateAudio", definition.generateAudio],
+  ] as const) {
     if (!generate) continue;
-    Object.assign(provider, { [name]: async (request: ImageRequest & VideoRequest & AudioRequest) => {
+    Object.assign(provider, { [name]: async (request: ImageRequest | VideoRequest | AudioRequest) => {
       let failure: { status?: number; message: string } | undefined;
       let pendingRequests = 0;
       let overlappingRequests = false;
@@ -395,7 +467,14 @@ export async function loadMediaProviderSource(source: string, config: Record<str
           return response;
         } finally { pendingRequests--; }
       }, { preconnect: provider.tool.fetch.preconnect }) as typeof fetch };
-      try { return await generate.call({ ...provider, tool }, request); }
+      const context = { ...provider, tool };
+      try {
+        const prepared = definition.processMedia ? await definition.processMedia.call(context, request) : request;
+        // ACT: 预处理沿用原生成类型，在动态分发边界按对应方法收窄请求。
+        if (name === "generateImage") return await generate.call(context, prepared as ImageRequest);
+        if (name === "generateVideo") return await generate.call(context, prepared as VideoRequest);
+        return await generate.call(context, prepared as AudioRequest);
+      }
       catch (error) {
         const info = error as { name?: unknown; message?: unknown } | null;
         if (signal?.aborted || info?.name === "AbortError") throw error;

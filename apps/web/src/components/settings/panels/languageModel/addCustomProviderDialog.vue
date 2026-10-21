@@ -15,7 +15,7 @@
         <div class="formGrid">
           <el-form-item label="Provider ID" prop="id"><el-input v-model="form.id" placeholder="例如 myProvider" /></el-form-item>
           <el-form-item label="显示名称" prop="label"><el-input v-model="form.label" placeholder="供应商的显示名称" /></el-form-item>
-          <el-form-item label="API 地址" prop="apiUrl"><el-input v-model="form.apiUrl" placeholder="https://api.example.com/v1" /></el-form-item>
+          <el-form-item label="API 地址" prop="apiUrl"><el-input v-model="form.apiUrl" dir="ltr" placeholder="https://api.example.com/v1" /></el-form-item>
           <el-form-item label="API 协议" prop="protocol">
             <el-select v-model="form.protocol" aria-label="API 协议">
               <el-option v-for="protocol in protocols" :key="protocol" :label="protocol" :value="protocol" />
@@ -23,11 +23,11 @@
           </el-form-item>
         </div>
         <el-form-item label="API 密钥" prop="apiKey">
-          <el-input v-model="form.apiKey" type="password" showPassword autocomplete="off" placeholder="本地无鉴权服务可留空" />
+          <el-input v-model="form.apiKey" type="password" dir="ltr" showPassword autocomplete="off" placeholder="本地无鉴权服务可留空" />
         </el-form-item>
         <div class="modelHeader">
           <el-text tag="strong">模型列表</el-text>
-          <el-button :icon="IconDownload" :loading="fetching || modelRefreshPending" @click="fetchModels()">获取模型列表</el-button>
+          <el-button :icon="IconDownload" :loading="fetching" @click="fetchModels()">获取模型列表</el-button>
         </div>
         <div class="modelList">
           <div v-for="item in models" :key="item.key" class="modelItem">
@@ -38,7 +38,7 @@
                 text
                 :icon="expandedModels.has(item.key) ? IconChevronUp : IconChevronDown"
                 :aria-expanded="expandedModels.has(item.key)"
-                aria-label="展开 token 设置"
+                aria-label="展开模型设置"
                 @click="expandedModels.has(item.key) ? expandedModels.delete(item.key) : expandedModels.add(item.key)" />
               <el-button
                 text
@@ -47,27 +47,63 @@
                 aria-label="删除模型"
                 @click="models = models.filter((model) => model.key !== item.key)" />
             </div>
-            <div v-if="expandedModels.has(item.key)" class="formGrid tokenSettings">
-              <el-form-item label="上下文窗口">
-                <el-input-number
-                  v-model="item.contextWindow"
-                  :min="1"
-                  :max="Number.MAX_SAFE_INTEGER"
-                  :precision="0"
-                  controlsPosition="right"
-                  placeholder="未设置"
-                  aria-label="上下文窗口" />
+            <div v-if="expandedModels.has(item.key)" class="modelSettings">
+              <div class="formGrid tokenSettings">
+                <el-form-item label="上下文窗口">
+                  <el-input-number
+                    v-model="item.contextWindow"
+                    :min="1"
+                    :max="Number.MAX_SAFE_INTEGER"
+                    :precision="0"
+                    controlsPosition="right"
+                    placeholder="未设置"
+                    aria-label="上下文窗口" />
+                </el-form-item>
+                <el-form-item label="最大输出 token">
+                  <el-input-number
+                    v-model="item.maxOutputTokens"
+                    :min="1"
+                    :max="Number.MAX_SAFE_INTEGER"
+                    :precision="0"
+                    controlsPosition="right"
+                    placeholder="未设置"
+                    aria-label="最大输出 token" />
+                </el-form-item>
+              </div>
+              <el-form-item class="reasoningMode" label="思考强度档位">
+                <el-select :modelValue="getReasoningMode(item)" aria-label="思考强度配置方式" @update:modelValue="setReasoningMode(item, $event)">
+                  <el-option label="继承模型目录" value="inherit" />
+                  <el-option label="禁用思考强度" value="disabled" />
+                  <el-option label="自定义档位" value="custom" />
+                </el-select>
               </el-form-item>
-              <el-form-item label="最大输出 token">
-                <el-input-number
-                  v-model="item.maxOutputTokens"
-                  :min="1"
-                  :max="Number.MAX_SAFE_INTEGER"
-                  :precision="0"
-                  controlsPosition="right"
-                  placeholder="未设置"
-                  aria-label="最大输出 token" />
-              </el-form-item>
+              <div v-if="getReasoningMode(item) === 'custom'" class="reasoningSettings">
+                <div class="reasoningChoices" aria-label="支持的思考档位">
+                  <el-checkbox
+                    v-for="level in thinkingLevels"
+                    :key="level"
+                    class="reasoningChoice"
+                    border
+                    :modelValue="hasReasoningLevel(item, level)"
+                    @update:modelValue="setReasoningLevel(item, level, !!$event)">
+                    {{ thinkingLevelLabels[level] }}
+                  </el-checkbox>
+                </div>
+                <el-text type="info" size="small">勾选支持的档位并填写接口值；off 可留空，不指定强度值。</el-text>
+                <div class="reasoningMappings">
+                  <div v-for="level in thinkingLevels.filter(level => hasReasoningLevel(item, level))" :key="level" class="reasoningRow">
+                    <div class="reasoningLevel">
+                      <span>{{ thinkingLevelLabels[level] }}</span>
+                      <span class="reasoningKey">{{ level }}</span>
+                    </div>
+                    <el-input
+                      :modelValue="getReasoningValue(item, level)"
+                      :placeholder="level === 'off' ? '留空使用协议默认值' : '接口值，例如 ' + level"
+                      :aria-label="level + ' 接口值'"
+                      @update:modelValue="setReasoningValue(item, level, $event)" />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -77,7 +113,7 @@
     </el-scrollbar>
     <template #footer>
       <el-button :disabled="saving" @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="fetching || modelRefreshPending" @click="addProvider">
+      <el-button type="primary" :loading="saving" :disabled="fetching" @click="addProvider">
         {{ provider ? "保存修改" : "确定添加供应商" }}
       </el-button>
     </template>
@@ -122,6 +158,7 @@ import {
 import { saveSettings, type CustomProvider, type CustomProviderModel } from "@/stores/settings";
 import { languageProviders } from "@toonflow/providers";
 import { isTfRouterProvider } from "@/lib/tf";
+import { thinkingLevels, type ThinkingLevel, type ReasoningEfforts } from "@toonflow/server/modelReasoning";
 
 const props = defineProps<{ provider?: CustomProvider }>();
 const visible = defineModel<boolean>({ default: false });
@@ -133,6 +170,7 @@ const fetchedModels = shallowRef<CustomProviderModel[]>([]);
 const selectedIds = ref(new Set<string>());
 const modelSearch = ref("");
 const saving = ref(false);
+const thinkingLevelLabels: Record<ThinkingLevel, string> = { off: "关闭", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
 const protocols = ["openai-completions", "openai-responses", "anthropic-messages"];
 const addedIds = computed(() => new Set(models.value.map((item) => item.id.trim())));
 const filteredModels = computed(() => {
@@ -159,8 +197,6 @@ const resultColumns = computed<Column[]>(() => [
 ]);
 const resultsVisible = ref(false);
 const fetching = ref(false);
-const modelRefreshPending = ref(false);
-const modelFetchFailed = ref(false);
 const formError = ref("");
 let request: AbortController | undefined;
 const rules: FormRules = {
@@ -189,8 +225,8 @@ watch(visible, (value) => {
   if (value) {
     resetForm();
     if (props.provider) {
-      const { models: providerModels, ...config } = props.provider;
-      Object.assign(form, config);
+      const { models: providerModels, id, label, apiUrl, protocol, apiKey } = props.provider;
+      Object.assign(form, { id, label, apiUrl, protocol, apiKey });
       models.value = providerModels.map((item) => ({ ...item, key: crypto.randomUUID() }));
     }
   } else {
@@ -199,25 +235,7 @@ watch(visible, (value) => {
   }
 }, { immediate: true });
 onBeforeUnmount(() => request?.abort());
-
-watch(
-  [visible, () => form.id, () => form.apiUrl, () => form.protocol, () => form.apiKey],
-  ([isVisible], _previous, onCleanup) => {
-    if (!isVisible || !isTfRouterProvider(form) || !form.apiKey.trim()) return;
-    modelRefreshPending.value = true;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try { await fetchModels(true); }
-      finally { if (!cancelled) modelRefreshPending.value = false; }
-    }, 500);
-    onCleanup(() => {
-      cancelled = true;
-      clearTimeout(timer);
-      request?.abort();
-      modelRefreshPending.value = false;
-    });
-  },
-);
+watch([() => form.id, () => form.apiUrl, () => form.protocol, () => form.apiKey], () => request?.abort());
 
 function resetForm() {
   Object.assign(form, { id: "", label: "", apiUrl: "", protocol: "openai-completions", apiKey: "" });
@@ -227,14 +245,12 @@ function resetForm() {
   selectedIds.value = new Set();
   modelSearch.value = "";
   formError.value = "";
-  modelFetchFailed.value = false;
 }
 
-async function fetchModels(autoApply = false) {
+async function fetchModels() {
   if (fetching.value || !(await providerForm.value?.validateField("apiUrl").catch(() => false))) return;
   fetching.value = true;
   formError.value = "";
-  modelFetchFailed.value = false;
   const controller = new AbortController();
   request = controller;
   try {
@@ -245,9 +261,12 @@ async function fetchModels(autoApply = false) {
     );
     if (controller.signal.aborted) return;
     if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "获取模型列表失败");
-    if (autoApply || isTfRouterProvider(form)) {
+    if (isTfRouterProvider(form)) {
       if (!data.data.length) throw new Error("未获取到可用模型，请检查 API Key 后重试");
-      models.value = data.data.map((item: CustomProviderModel) => ({ ...item, key: crypto.randomUUID() }));
+      models.value = data.data.map((item: CustomProviderModel) => {
+        const existing = models.value.find(model => model.id === item.id);
+        return { ...item, ...(existing?.reasoningEfforts === undefined ? {} : { reasoningEfforts: existing.reasoningEfforts }), key: crypto.randomUUID() };
+      });
       return;
     }
     fetchedModels.value = data.data;
@@ -256,7 +275,6 @@ async function fetchModels(autoApply = false) {
     resultsVisible.value = true;
   } catch (error) {
     if (!controller.signal.aborted) {
-      modelFetchFailed.value = true;
       formError.value = axios.isAxiosError(error)
         ? error.response?.data?.message || "获取模型列表失败，请检查连接配置"
         : error instanceof Error
@@ -284,8 +302,35 @@ function addManualModel() {
   models.value.push({ key, id: "", label: "" });
 }
 
+function getReasoningMode(model: CustomProviderModel) {
+  return model.reasoningEfforts === undefined ? "inherit" : model.reasoningEfforts === false ? "disabled" : "custom";
+}
+
+function setReasoningMode(model: CustomProviderModel, mode: string) {
+  model.reasoningEfforts = mode === "inherit" ? undefined : mode === "disabled" ? false : {};
+}
+
+function hasReasoningLevel(model: CustomProviderModel, level: ThinkingLevel) {
+  return !!model.reasoningEfforts && Object.hasOwn(model.reasoningEfforts, level);
+}
+
+function getReasoningValue(model: CustomProviderModel, level: ThinkingLevel) {
+  return model.reasoningEfforts && model.reasoningEfforts[level] || "";
+}
+
+function setReasoningLevel(model: CustomProviderModel, level: ThinkingLevel, enabled: boolean) {
+  const efforts = { ...(model.reasoningEfforts || {}) };
+  if (enabled) efforts[level] = level === "off" ? null : level;
+  else delete efforts[level];
+  model.reasoningEfforts = efforts;
+}
+
+function setReasoningValue(model: CustomProviderModel, level: ThinkingLevel, value: string) {
+  model.reasoningEfforts = { ...(model.reasoningEfforts || {}), [level]: level === "off" && !value ? null : value };
+}
+
 async function addProvider() {
-  if (fetching.value || modelRefreshPending.value || (isTfRouterProvider(form) && modelFetchFailed.value)) return;
+  if (fetching.value) return;
   formError.value = "";
   if (saving.value || !(await providerForm.value?.validate().catch(() => false))) return;
   const providerId = props.provider?.id;
@@ -302,6 +347,18 @@ async function addProvider() {
     formError.value = "token 限制必须为正整数或留空";
     return;
   }
+  for (const item of models.value) {
+    const efforts = item.reasoningEfforts;
+    if (!efforts) continue;
+    if (!Object.keys(efforts).some(level => level !== "off")) {
+      formError.value = `${item.id} 请至少启用一个思考档位，或选择继承目录 / 禁用`;
+      return;
+    }
+    if (Object.entries(efforts).some(([level, value]) => !(level === "off" && value === null) && (typeof value !== "string" || !value.trim()))) {
+      formError.value = `${item.id} 的思考档位接口值不能为空，只有 off 可以留空`;
+      return;
+    }
+  }
   saving.value = true;
   try {
     const updatedProvider = {
@@ -315,6 +372,9 @@ async function addProvider() {
         label: item.label.trim() || item.id.trim(),
         contextWindow: item.contextWindow ?? undefined,
         maxOutputTokens: item.maxOutputTokens ?? undefined,
+        reasoningEfforts: item.reasoningEfforts
+          ? Object.fromEntries(Object.entries(item.reasoningEfforts).map(([level, value]) => [level, value === null ? null : value.trim()])) as ReasoningEfforts
+          : item.reasoningEfforts,
       })),
     };
     await saveSettings(settings => {
@@ -326,7 +386,7 @@ async function addProvider() {
       }
       if (providerId && !existing?.some(item => item.id === providerId)) throw new Error("供应商已不存在");
       return { customProviders: providerId
-        ? existing!.map(item => item.id === providerId ? updatedProvider : item)
+        ? existing!.map(item => item.id === providerId ? { ...item, ...updatedProvider } : item)
         : [...(existing ?? []), updatedProvider] };
     });
     visible.value = false;
@@ -376,11 +436,78 @@ async function addProvider() {
         }
       }
 
-      .tokenSettings {
-        padding-top: 12px;
+      .modelSettings {
+        display: grid;
+        gap: 16px;
+        margin-top: 12px;
+        padding: 16px;
+        border-radius: var(--el-border-radius-base);
+        background: var(--el-fill-color-light);
 
-        .el-form-item {
-          margin-bottom: 4px;
+        .tokenSettings {
+          .el-form-item {
+            margin-bottom: 0;
+          }
+        }
+
+        .reasoningMode {
+          margin-bottom: 0;
+        }
+
+        .reasoningSettings {
+          display: grid;
+          gap: 12px;
+
+          .reasoningChoices {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+            gap: 8px;
+
+            .reasoningChoice {
+              display: flex;
+              justify-content: center;
+              height: 32px;
+              margin: 0;
+              padding: 0 8px;
+              background: var(--el-bg-color);
+              border-color: var(--el-border-color);
+
+              &.is-checked {
+                border-color: var(--el-color-primary);
+                background: var(--el-color-primary-light-9);
+              }
+            }
+          }
+
+          .reasoningMappings {
+            display: grid;
+            gap: 8px;
+
+            .reasoningRow {
+              display: grid;
+              grid-template-columns: 112px minmax(0, 1fr);
+              align-items: center;
+              gap: 12px;
+
+              .reasoningLevel {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                color: var(--el-text-color-primary);
+                font-size: 13px;
+
+                .reasoningKey {
+                  color: var(--el-text-color-secondary);
+                  font-size: 12px;
+                }
+              }
+
+              @media (max-width: 420px) {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 6px;
+              }
+            }
+          }
         }
       }
     }

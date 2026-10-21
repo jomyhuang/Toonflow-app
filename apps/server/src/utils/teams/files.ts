@@ -1,5 +1,6 @@
+import { t, validationOptions } from "@/lib/i18n";
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "@toonflow/file";
 import { dirname, resolve } from "node:path";
 import { teamLimits, teamNameSchema, teamSchema, validateTeamResources } from "@toonflow/teams-scaffold/runtime";
 import conf from "@/utils/conf";
@@ -44,14 +45,14 @@ export function validateFiles(name: string, files: Map<string, Uint8Array>) {
   const raw = files.get("team.json");
   if (!raw) throw Object.assign(new Error("团队包缺少 team.json"), { status: 400 });
   let manifest;
-  try { manifest = teamSchema.parse(JSON.parse(decodeText(raw))); }
-  catch (error) { throw Object.assign(new Error(`team.json 无效：${error instanceof Error ? error.message : String(error)}`), { status: 400 }); }
+  try { manifest = teamSchema.parse(JSON.parse(decodeText(raw)), validationOptions()); }
+  catch (error) { throw Object.assign(new Error(t`team.json 无效：${error instanceof Error ? error.message : String(error)}`), { status: 400 }); }
   if (manifest.name !== name) throw Object.assign(new Error("团队名称、目录及安装文件名必须一致"), { status: 400 });
   let total = 0;
   const names = new Map<string, string>();
   for (const [path, bytes] of files) {
     if (skillPath(path) !== path || !(editablePath(path) || /^readme\.md$/i.test(path) || /^tools\/[a-z][a-zA-Z0-9]*\.tool\.js$/.test(path))) {
-      throw Object.assign(new Error(`团队包包含不支持的文件：${path}`), { status: 400 });
+      throw Object.assign(new Error(t`团队包包含不支持的文件：${path}`), { status: 400 });
     }
     const parts = path.split("/");
     for (let index = 1; index <= parts.length; index++) {
@@ -66,7 +67,7 @@ export function validateFiles(name: string, files: Map<string, Uint8Array>) {
       parseTool(source, path.slice(6, -8));
       try {
         if (!new Bun.Transpiler({ loader: "js" }).scan(source).exports.includes("default")) throw new Error("default");
-      } catch { throw Object.assign(new Error(`私有工具语法无效或缺少默认导出：${path}`), { status: 400 }); }
+      } catch { throw Object.assign(new Error(t`私有工具语法无效或缺少默认导出：${path}`), { status: 400 }); }
     }
   }
   if (files.size > 2000 || total > maxBytes) throw Object.assign(new Error("团队包最多包含 2000 个文件，文件总大小不能超过 20 MB"), { status: 413 });

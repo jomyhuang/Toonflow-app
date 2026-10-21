@@ -44,22 +44,32 @@
         :disabled="disabled"
         :aria-label="`清除${label}`"
         title="取消绑定"
-        @click="draft = ''; emit('change', '')" />
+        @click="setBinding('')" />
     </template>
+    <el-dropdown v-if="allowNone" class="bindingOptions" :disabled="disabled" trigger="click" @command="setBinding" @visibleChange="optionsVisible = $event">
+      <el-button text size="small" :icon="optionsVisible ? IconChevronUp : IconChevronDown" :disabled="disabled" :aria-label="`设置${label}`" title="无需按键或取消绑定" />
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item command="None">无需按键</el-dropdown-item>
+          <el-dropdown-item command="">取消绑定</el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { IconX } from "@tabler/icons-vue";
+import { IconX, IconChevronDown, IconChevronUp } from "@tabler/icons-vue";
 import { getShortcutBindings, isModifierShortcut, shortcutFromEvent, shortcutLabel } from "@/lib/canvasShortcuts";
 
-const { code, mode, label, hold = false, disabled = false } = defineProps<{
-  code: string; mode: "listen" | "input"; label: string; hold?: boolean; disabled?: boolean;
+const { code, mode, label, hold = false, disabled = false, allowNone = false } = defineProps<{
+  code: string; mode: "listen" | "input"; label: string; hold?: boolean; disabled?: boolean; allowNone?: boolean;
 }>();
 const emit = defineEmits<{ change: [value: string] }>();
 const draft = ref(code);
 const recording = ref(false);
+const optionsVisible = ref(false);
 watch(() => [code, mode], () => { draft.value = code; });
 watch(() => mode, () => { recording.value = false; });
 
@@ -93,6 +103,12 @@ function cancelRecording() {
 
 function commitInput() {
   if (mode === "input") emit("change", draft.value);
+}
+
+function setBinding(value: string) {
+  recording.value = false;
+  draft.value = value;
+  emit("change", value);
 }
 </script>
 
@@ -153,6 +169,11 @@ function commitInput() {
     margin: 0;
     padding: 0;
     opacity: 0;
+  }
+  .bindingOptions {
+    flex-shrink: 0;
+
+    .el-button { width: 20px; padding: 0; }
   }
   &:hover .clearButton, &:focus-within .clearButton { opacity: 1; }
 }

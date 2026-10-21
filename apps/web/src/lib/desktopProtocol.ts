@@ -1,4 +1,5 @@
 import axios from "axios";
+import { t, translate } from "@toonflow/i18n/vue";
 import { h } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
@@ -12,7 +13,7 @@ declare global {
 }
 
 export function registerDesktopProtocol() {
-  const labels = { node: "节点", tool: "工具", skill: "技能", provider: "供应商", agent: "Agent" };
+  const labels = { node: "节点", ext: "文件扩展", tool: "工具", skill: "技能", provider: "供应商", agent: "Agent" };
   const pending = new Set<string>();
   let queue = Promise.resolve();
 
@@ -37,7 +38,7 @@ export function registerDesktopProtocol() {
       h("div", { style: { overflowWrap: "anywhere" } }, [
         h("p", `${labels[request.type]}：${request.fileName}`),
         h("p", { style: { maxHeight: "120px", overflow: "auto", fontSize: "12px", color: "var(--el-text-color-secondary)" } }, request.url),
-        h("p", "插件可能执行代码并访问本地文件，请仅安装信任来源的插件。"),
+        h("p", translate("插件可能执行代码并访问本地文件，请仅安装信任来源的插件。")),
       ]),
       "安装插件",
       { confirmButtonText: "确认安装", cancelButtonText: "取消", closeOnClickModal: false },
@@ -54,9 +55,10 @@ export function registerDesktopProtocol() {
       if (typeof data.data?.name !== "string" || !data.data.name.trim()) throw new Error("安装接口未返回有效的插件名称，请先检查插件列表，再重试");
       if (request.type === "provider") invalidateNodeModels("media");
       window.dispatchEvent(new CustomEvent("toonflow:plugin-installed", { detail: { type: request.type, name: data.data.name } }));
+      if (request.type === "ext") window.dispatchEvent(new CustomEvent("toonflow:ext-updated", { detail: { name: data.data.name } }));
       ElMessage({ type: "success", message: `${labels[request.type]}已安装` });
     } catch (error) {
-      let message = error instanceof Error ? error.message : "安装失败，请稍后重试";
+      let message = error instanceof Error ? error.message : translate("安装失败，请稍后重试");
       if (axios.isAxiosError(error)) {
         const response = error.response;
         const data = response?.data;
@@ -64,11 +66,11 @@ export function registerDesktopProtocol() {
           message = data.message;
           if (Array.isArray(data.data) && data.data.every((item: unknown) => typeof item === "string")) message += `：${data.data.join("；")}`;
         } else if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
-          message = "安装请求等待超时，请先查看插件是否已安装，再重试";
+          message = translate("安装请求等待超时，请先查看插件是否已安装，再重试");
         } else if (!response) {
-          message = "无法连接 Toonflow 本机服务，请确认应用正常运行后重试";
+          message = translate("无法连接 Toonflow 本机服务，请确认应用正常运行后重试");
         } else {
-          message = `安装接口返回异常（HTTP ${response.status}），请重启或更新 Toonflow 后重试`;
+          message = t`安装接口返回异常（HTTP ${response.status}），请重启或更新 Toonflow 后重试`;
         }
       }
       ElMessage({ type: "error", message: `${labels[request.type]}“${request.fileName}”安装失败：${message}`, duration: 10000, showClose: true });

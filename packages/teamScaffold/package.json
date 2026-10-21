@@ -10,6 +10,7 @@
   },
   "scripts": { "typecheck": "tsc" },
   "dependencies": {
+    "@toonflow/file": "workspace:*",
     "@a2a-js/sdk": "1.2.0",
     "fflate": "^0.8.3",
     "zod": "^4.6.2"

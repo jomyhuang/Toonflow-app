@@ -3,10 +3,10 @@
     <div class="shortcutHeader">
       <h3 id="canvasShortcutsTitle">画布快捷键</h3>
       <div class="shortcutActions">
-        <el-dropdown trigger="click" @command="changeBindMode">
+        <el-dropdown trigger="click" @command="changeBindMode" @visibleChange="bindModeVisible = $event">
           <el-button text size="small" aria-label="快捷键绑定方式">
             {{ bindMode === 'listen' ? '按键录制' : '手动填写' }}
-            <icon-chevron-down :size="14" />
+            <component :is="bindModeVisible ? IconChevronUp : IconChevronDown" :size="14" aria-hidden="true" />
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -19,14 +19,15 @@
       </div>
     </div>
     <p class="description">
-      {{ bindMode === "listen" ? "点击键帽录制，Esc 退出；右侧 × 取消绑定。" : "使用按键代号，如 Ctrl+KeyG / Alt+KeyG；回车或移开焦点保存，留空取消绑定。" }}
+      {{ bindMode === "listen" ? "点击键帽录制，Esc 退出；右侧 × 取消绑定，箭头菜单可选择无需按键。" : "使用按键代号，如 Ctrl+KeyG / Alt+KeyG；None 表示无需按键，可写 None / Space；留空取消绑定，回车或移开焦点保存。" }}
     </p>
+    <p class="description">将画布平移设为无需按键前，请先把框选节点改成 Shift 等按键。</p>
     <el-form class="shortcutList">
       <el-form-item v-for="field in canvasShortcutFields" :key="`${field.id}:${resetKey}`" class="shortcutItem" :error="issues[field.id]">
         <div class="shortcutRow">
           <div class="shortcutInfo">
             <span class="shortcutName">{{ field.label }}</span>
-            <span v-if="field.hold" class="shortcutHint">{{ field.gesture === 'drag' ? '按住并拖动节点' : field.gesture === 'wheel' ? '按住并滚动' : '按住并拖动画布' }}</span>
+            <span v-if="field.hold" class="shortcutHint">{{ shortcutDescriptions[field.id] }}</span>
           </div>
           <keyInput
             class="shortcutInput"
@@ -34,26 +35,37 @@
             :mode="bindMode"
             :label="`${field.label}快捷键`"
             :hold="field.hold"
+            :allowNone="field.allowNone"
             @change="setShortcut(field.id, $event)" />
         </div>
       </el-form-item>
       <div class="gestureRow"><span>触摸板缩放</span><span class="gestureValue"><icon-hand-two-fingers :size="16" />双指捏合</span></div>
-      <div class="gestureRow"><span>触摸板平移</span><span class="gestureValue"><icon-hand-two-fingers :size="16" />双指滑动</span></div>
-      <div class="gestureRow"><span>鼠标平移</span><span class="gestureValue"><icon-mouse :size="16" />滚轮 / 中键拖动</span></div>
+      <div class="gestureRow"><span>触摸板双指滑动</span><span class="gestureValue"><icon-hand-two-fingers :size="16" />跟随滚轮配置</span></div>
+      <div class="gestureRow"><span>鼠标平移</span><span class="gestureValue"><icon-mouse :size="16" />中键拖动</span></div>
     </el-form>
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { IconRestore, IconChevronDown, IconKeyboard, IconEdit, IconHandTwoFingers, IconMouse } from "@tabler/icons-vue";
+import { translate } from "@toonflow/i18n/vue";
+import { IconRestore, IconChevronDown, IconChevronUp, IconKeyboard, IconEdit, IconHandTwoFingers, IconMouse } from "@tabler/icons-vue";
 import { generalSettings, updateGeneralSettings } from "@/stores/settings";
 import { canvasShortcutFields, defaultCanvasShortcuts, getShortcutBindings, isShortcutAllowed, normalizeShortcut, type CanvasShortcutAction } from "@/lib/canvasShortcuts";
 import keyInput from "./keyInput.vue";
 
 const bindMode = ref<"listen" | "input">("listen");
+const bindModeVisible = ref(false);
 const resetKey = ref(0);
 const issues = ref<Partial<Record<CanvasShortcutAction, string>>>({});
+const shortcutDescriptions: Partial<Record<CanvasShortcutAction, string>> = {
+  copyOnDrag: "按住并拖动节点",
+  duplicateOnDrag: "按住并拖动节点",
+  zoom: "按配置滚动鼠标滚轮",
+  pan: "无需按键时，仅平移空白处",
+  selection: "左键拖动空白处框选",
+  multiSelection: "左键点击追加或取消选择",
+};
 
 function changeBindMode(mode: "listen" | "input") {
   bindMode.value = mode;
@@ -65,7 +77,8 @@ function setShortcut(action: CanvasShortcutAction, value: string) {
   const field = canvasShortcutFields.find(field => field.id === action)!;
   if (binding === undefined || !isShortcutAllowed(field, binding)) {
     issues.value[action] = binding === undefined ? "请输入有效按键，例如 Ctrl+KeyG / Alt+KeyG。"
-      : field.gesture === "drag" ? "拖拽操作只绑定修饰键，例如 Alt 或 Ctrl+Alt。" : "此操作需要普通按键，例如 KeyP 或 Ctrl+KeyZ。";
+      : field.gesture === "drag" ? "拖拽操作只绑定修饰键，例如 Alt 或 Ctrl+Alt。"
+      : field.gesture === "click" ? translate("追加选择只绑定修饰键，例如 Ctrl 或 Meta。") : "此操作需要普通按键，例如 KeyP 或 Ctrl+KeyZ。";
     return;
   }
   const bindings = getShortcutBindings(binding);
@@ -148,6 +161,7 @@ function resetShortcuts() {
 
         .shortcutInfo {
           flex-shrink: 0;
+          max-width: 50%;
           line-height: 1.5;
 
           .shortcutName { font-size: 13px; }

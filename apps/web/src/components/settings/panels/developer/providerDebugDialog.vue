@@ -27,7 +27,7 @@
                 <div v-for="(item, index) in references" :key="item.url" class="referenceItem">
                   <el-image v-if="item.file.type.startsWith('image/')" :src="item.url" fit="cover" :previewSrcList="[item.url]" previewTeleported />
                   <video v-else-if="item.file.type.startsWith('video/')" :src="item.url" muted preload="metadata" />
-                  <icon-volume v-else :size="22" aria-hidden="true" />
+                  <icon-music v-else :size="22" aria-hidden="true" />
                   <el-button class="removeReference" circle size="small" :icon="IconX" :disabled="busy" :aria-label="`移除 ${item.file.name}`" @click="removeReference(index)" />
                   <el-select v-if="activeModel?.type === 'video' && item.file.type.startsWith('image/')" v-model="item.role" size="small" aria-label="参考图用途">
                     <el-option label="参考图" value="images" /><el-option label="首帧" value="firstFrame" /><el-option label="尾帧" value="lastFrame" />
@@ -67,7 +67,7 @@
             </div>
             <el-collapse>
               <el-collapse-item title="更多请求参数" name="request">
-                <el-input v-model="extraParameters" type="textarea" :rows="4" aria-label="更多请求参数 JSON" placeholder="JSON 对象，可填写 mode、quality、other 等字段" />
+                <el-input v-model="extraParameters" type="textarea" dir="ltr" :rows="4" aria-label="更多请求参数 JSON" placeholder="JSON 对象，可填写 mode、quality、other 等字段" />
               </el-collapse-item>
             </el-collapse>
           </el-form>
@@ -103,7 +103,7 @@
     </div>
     <template v-if="provider" #footer>
       <div class="debugFooter">
-        <el-text size="small" :type="status === '成功' ? 'success' : status === '失败' ? 'danger' : 'info'" role="status">{{ status }}{{ elapsed ? ` · ${(elapsed / 1000).toFixed(1)} 秒` : '' }}</el-text>
+        <el-text size="small" :type="status === '成功' ? 'success' : status === '失败' ? 'danger' : 'info'" role="status">{{ statusLabel }}{{ elapsed ? ` · ${(elapsed / 1000).toFixed(1)} 秒` : '' }}</el-text>
         <div>
           <el-button :icon="IconDownload" :disabled="busy || !source" :loading="action === 'install'" @click="install">安装供应商</el-button>
           <el-button v-if="action === 'run'" type="danger" :icon="IconPlayerStop" @click="stop">停止</el-button>
@@ -115,13 +115,15 @@
 </template>
 
 <script setup lang="ts">
+import { locale, translate } from "@toonflow/i18n/vue";
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import axios from "axios";
 import formCreate, { type Api, type Options, type Rule } from "../../formCreate";
 import { ElMessage } from "element-plus";
-import { IconFolderOpen, IconRefresh, IconPlus, IconX, IconVolume, IconDownload, IconPlayerPlay, IconPlayerStop } from "@tabler/icons-vue";
+import { IconFolderOpen, IconRefresh, IconPlus, IconX, IconMusic, IconDownload, IconPlayerPlay, IconPlayerStop } from "@tabler/icons-vue";
 import type { Provider } from "@toonflow/providers";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
+import { isDesktop } from "@/lib/platform";
 
 type DebugProvider = { id: string; label: string; rules: Rule[]; models: Provider["models"] };
 type DebugLog = { id: number; method: string; url: string; state: string; status?: number; duration?: number; request?: string; response?: string; error?: string };
@@ -159,9 +161,17 @@ const logs = shallowRef<DebugLog[]>([]);
 const responseText = ref("");
 const errorMessage = ref("");
 const activeTab = ref("preview");
-const status = ref("");
+const status = ref<"" | "失败" | "已选择文件" | "已读取" | "成功" | "运行中…" | "已停止">("");
+const statusLabel = computed(() => ({
+  "": "",
+  "失败": translate("失败"),
+  "已选择文件": translate("已选择文件"),
+  "已读取": translate("已读取"),
+  "成功": translate("成功"),
+  "运行中…": translate("运行中…"),
+  "已停止": translate("已停止"),
+})[status.value]);
 const elapsed = ref(0);
-const isDesktop = new URLSearchParams(window.location.search).get("desktop") === "1";
 const desktopHeaders = { "x-toonflow-desktop": "1" };
 let controller: AbortController | undefined;
 
@@ -333,7 +343,7 @@ async function run() {
     if (formApi.value && !(await formApi.value.validate().catch(() => false))) throw new Error("请检查供应商配置");
     const request = await buildRequest();
     signal.throwIfAborted();
-    const response = await fetch("/api/providers/debug/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: source.value, config: formApi.value?.formData() ?? config.value, request }), signal });
+    const response = await fetch("/api/providers/debug/run", { method: "POST", headers: { "Accept-Language": locale.value, "Content-Type": "application/json" }, body: JSON.stringify({ source: source.value, config: formApi.value?.formData() ?? config.value, request }), signal });
     if (!response.ok) throw new Error((await response.json()).message || "调试请求失败");
     if (!response.body) throw new Error("未收到运行结果");
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();

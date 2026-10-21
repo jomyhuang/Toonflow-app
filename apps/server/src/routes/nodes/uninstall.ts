@@ -1,5 +1,5 @@
 import u from "@/utils";
-import { lstat, unlink } from "node:fs/promises";
+import { lstat, unlink } from "@toonflow/file";
 import { dirname, resolve } from "node:path";
 import { Router } from "express";
 import { z } from "zod";
@@ -28,6 +28,8 @@ export default router.delete("/", validateFields({ name: z.string().regex(/^[a-z
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return res.status(404).json(error("节点不存在", null, 404));
     throw err;
   }
+  const settings = u.conf.get("settings", {});
+  if (u.cleanNodeMenuSettings(settings)) u.conf.set("settings", settings);
   await unlink(markerPath).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== "ENOENT") throw err;
   });

@@ -1,7 +1,7 @@
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { Router } from "express";
 import { zip } from "fflate";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "@toonflow/file";
 import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import u from "@/utils";
@@ -12,11 +12,11 @@ const router = Router();
 const maxBytes = 20 * 1024 * 1024;
 
 export default router.get("/", validateFields({
-  type: z.enum(["node", "tool", "skill", "agent"]),
+  type: z.enum(["node", "tool", "skill", "agent", "ext"]),
   name: z.string().min(1).max(96).regex(/^[a-zA-Z0-9][a-zA-Z0-9-]*$/),
 }, "query"), async (req, res) => {
   if (!u.workspace.isLocalWorkspaceRequest(req)) return res.status(403).json(error("请在桌面端或服务器本机导出插件", null, 403));
-  const { type, name } = req.query as { type: "node" | "tool" | "skill" | "agent"; name: string };
+  const { type, name } = req.query as { type: "node" | "tool" | "skill" | "agent" | "ext"; name: string };
   if (type === "agent") {
     const { files } = await u.teams.readTeam(name);
     const bytes = await new Promise<Uint8Array>((resolve, reject) => {
@@ -26,7 +26,7 @@ export default router.get("/", validateFields({
     return res.set("Cache-Control", "no-store").attachment(`${name}.agent.zip`).send(Buffer.from(bytes));
   }
   const root = await realpath(dirname(u.conf.path));
-  const directory = resolve(root, `${type}s`);
+  const directory = resolve(root, type === "ext" ? "ext" : `${type}s`);
   if (!(await lstat(directory)).isDirectory() || !u.workspaceFile.isWithin(root, await realpath(directory))) {
     return res.status(400).json(error("插件目录无效", null, 400));
   }
@@ -43,8 +43,8 @@ export default router.get("/", validateFields({
   }
 
   if (type !== "skill") {
-    if (!/^[a-z][a-zA-Z0-9]*$/.test(name)) return res.status(400).json(error("插件名称无效", null, 400));
-    const fileName = `${name}.${type === "node" ? "umd" : "tool"}.js`;
+    if (!(type === "ext" ? /^ext-[a-z][a-zA-Z0-9]*$/ : /^[a-z][a-zA-Z0-9]*$/).test(name)) return res.status(400).json(error("插件名称无效", null, 400));
+    const fileName = `${name}.${type === "node" || type === "ext" ? "umd" : "tool"}.js`;
     const bytes = await readFileBytes(join(directory, fileName));
     return res.set("Cache-Control", "no-store").attachment(fileName).send(bytes);
   }

@@ -12,14 +12,12 @@
     "./nodeInputs": "./src/nodeInputs.ts",
     "./utils": "./src/nodeInputs.ts",
     "./nodeEvent": "./src/nodeEvent.ts",
+    "./nodeDocument": "./src/nodeDocument.ts",
     "./nodeAi": "./src/nodeAi.ts",
     "./nodeFfmpeg": "./src/nodeFfmpeg.ts",
+    "./nodeAsr": "./src/nodeAsr.ts",
     "./workspaceFiles": "./src/workspaceFiles.ts",
-    "./nodeTools": "./src/nodeTools.ts",
-    "./promptInput": "./src/components/promptInput.vue",
-    "./videoPlayer": "./src/components/videoPlayer.vue",
-    "./mediaHistory": "./src/components/mediaHistory.vue",
-    "./referenceItem": "./src/components/referenceItem.vue"
+    "./nodeTools": "./src/nodeTools.ts"
   },
   "scripts": {
     "typecheck": "vue-tsc --noEmit"
@@ -30,6 +28,8 @@
     "element-plus": "^2.14.5"
   },
   "dependencies": {
+    "@toonflow/asr": "workspace:*",
+    "@toonflow/file": "workspace:*",
     "@toonflow/ffmpeg": "workspace:*",
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
@@ -37,9 +37,7 @@
     "@vitejs/plugin-vue": "^6.0.8",
     "vite": "^8.2.2",
     "eventsource-parser": "3.1.1",
-    "zod": "^4.6.2",
-    "vue-draggable-plus": "^0.6.1",
-    "x-sender": "1.4.6"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@form-create/element-ui": "^3",

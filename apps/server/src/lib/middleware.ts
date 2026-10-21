@@ -1,10 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { error } from "./responseFormat";
-
-import { zhCN } from "zod/locales";
-
-z.config(zhCN());
+import { t, translateMessage, validationOptions } from "./i18n";
 
 export function validateFields(
   shape: Record<string, z.ZodType>,
@@ -14,9 +11,9 @@ export function validateFields(
 
   return (req: Request, res: Response, next: NextFunction) => {
     const data = req[source];
-    const parseResult = schema.safeParse(data);
+    const parseResult = schema.safeParse(data, validationOptions());
     if (!parseResult.success) {
-      const errors = parseResult.error.issues.map((issue) => `字段 ${issue.path.join(".")} ${issue.message}`);
+      const errors = parseResult.error.issues.map((issue) => t`字段 ${issue.path.join(".")} ${translateMessage(issue.message)}`);
       console.error(errors);
       return res.status(400).json(error("参数错误", errors));
     }

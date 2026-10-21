@@ -5,7 +5,7 @@
         <h3 id="instructionsTitle">Toonflow 说明</h3>
         <p class="description">为所有聊天提供额外说明和上下文。支持 Markdown，保存后下一次发送消息时生效。</p>
       </div>
-      <el-alert v-if="document.error" :title="document.error" type="error" :closable="false" showIcon />
+      <el-alert v-if="document.error" :title="getDocumentError(document)" type="error" :closable="false" showIcon />
       <el-input
         v-model="document.content"
         type="textarea"
@@ -78,7 +78,7 @@
     </section>
     <el-dialog v-model="memoryVisible" title="Toonflow 记忆" width="min(760px, calc(100vw - 32px))" alignCenter appendToBody>
       <div class="memoryContent">
-        <el-alert v-if="memoryDocument.error" :title="memoryDocument.error" type="error" :closable="false" showIcon />
+        <el-alert v-if="memoryDocument.error" :title="getDocumentError(memoryDocument)" type="error" :closable="false" showIcon />
         <el-input
           v-if="memoryEditing"
           v-model="memoryDocument.content"
@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { msg, translate } from "@toonflow/i18n/vue";
 import { computed, onActivated, reactive, ref, watch } from "vue";
 import axios from "axios";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -147,6 +148,7 @@ type DocumentResponse = { code: number; data: DocumentContent; message?: string 
 const props = defineProps<{ visible: boolean }>();
 const maxLength = 20000;
 const headers = { "x-toonflow-workspace": "1" };
+const conflictMessage = msg`文件已被其他操作修改。当前草稿已保留，请先复制需要保留的内容，再重新加载最新版本。`;
 const document = reactive<DocumentState>({
   content: "",
   revision: "",
@@ -171,6 +173,10 @@ const memoryDocument = reactive<DocumentState>({
 
 function isDirty(document: DocumentState) {
   return document.content !== document.savedContent;
+}
+
+function getDocumentError(document: DocumentState) {
+  return document.error === conflictMessage.id ? translate(conflictMessage) : document.error;
 }
 
 function errorMessage(error: unknown) {
@@ -234,7 +240,7 @@ async function saveDocument(document: DocumentState, name: "agents" | "memory") 
     );
     if (data.code === 409) {
       document.conflict = true;
-      throw new Error("文件已被其他操作修改。当前草稿已保留，请先复制需要保留的内容，再重新加载最新版本。");
+      throw new Error(conflictMessage.id);
     }
     if (data.code !== 200) throw new Error(data.message || "保存失败，请重试");
     document.savedContent = data.data.content;
@@ -244,8 +250,8 @@ async function saveDocument(document: DocumentState, name: "agents" | "memory") 
     return true;
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 409) document.conflict = true;
-    document.error = document.conflict ? "文件已被其他操作修改。当前草稿已保留，请先复制需要保留的内容，再重新加载最新版本。" : errorMessage(error);
-    ElMessage.error(document.error);
+    document.error = document.conflict ? conflictMessage.id : errorMessage(error);
+    ElMessage.error(getDocumentError(document));
   } finally {
     document.saving = false;
   }
@@ -278,7 +284,7 @@ async function viewMemory() {
   try {
     await loadDocument(memoryDocument, "memory");
     if (memoryDocument.loaded) memoryVisible.value = true;
-    else ElMessage.error(memoryDocument.error);
+    else ElMessage.error(getDocumentError(memoryDocument));
   } catch (error) {
     ElMessage.error(errorMessage(error));
   } finally {

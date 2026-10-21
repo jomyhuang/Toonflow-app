@@ -1,5 +1,6 @@
+import { t, translateMessage } from "@/lib/i18n";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath } from "@toonflow/file";
 import { dirname, join } from "node:path";
 import conf from "@/utils/conf";
 import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
@@ -37,27 +38,29 @@ async function readContent(path: string) {
   if (!info) return "";
   if (info.isSymbolicLink()) throw Object.assign(new Error("不能通过符号链接访问个性化文档"), { status: 403 });
   if (!info.isFile()) throw Object.assign(new Error("个性化文档必须是普通文件"), { status: 400 });
-  if (info.size > maxDocumentLength * 3 + 3) throw Object.assign(new Error(`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
+  if (info.size > maxDocumentLength * 3 + 3) throw Object.assign(new Error(t`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
   const content = (await readFile(path, "utf8")).replace(/^\uFEFF/, "");
-  if (content.length > maxDocumentLength) throw Object.assign(new Error(`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
+  if (content.length > maxDocumentLength) throw Object.assign(new Error(t`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
   return content;
 }
 
-function documentError(action: string, document: PersonalizationDocument, cause: unknown) {
+function documentError(action: "read" | "save", document: PersonalizationDocument, cause: unknown) {
   const err = cause as NodeJS.ErrnoException & { status?: number };
-  return Object.assign(new Error(`${action}${labels[document] ?? "个性化文档"}失败：${err?.message ?? String(cause)}`, { cause }), { status: err?.status, code: err?.code });
+  const label = translateMessage(labels[document] ?? "个性化文档");
+  const message = translateMessage(err?.message ?? String(cause));
+  return Object.assign(new Error(action === "read" ? t`读取${label}失败：${message}` : t`保存${label}失败：${message}`, { cause }), { status: err?.status, code: err?.code });
 }
 
 export async function readDocument(document: PersonalizationDocument) {
   try {
     return result(await readContent(await documentPath(document)));
-  } catch (err) { throw documentError("读取", document, err); }
+  } catch (err) { throw documentError("read", document, err); }
 }
 
 export async function saveDocument(document: PersonalizationDocument, content: string, revision: string) {
   try {
     content = content.replace(/^\uFEFF/, "");
-    if (content.length > maxDocumentLength) throw Object.assign(new Error(`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
+    if (content.length > maxDocumentLength) throw Object.assign(new Error(t`个性化文档不能超过 ${maxDocumentLength} 个字符`), { status: 413 });
     const path = await documentPath(document);
     const release = lockWorkspaceFiles([path]);
     try {
@@ -67,5 +70,5 @@ export async function saveDocument(document: PersonalizationDocument, content: s
       await writeWorkspaceFile(await documentPath(document), content);
       return result(content);
     } finally { release(); }
-  } catch (err) { throw documentError("保存", document, err); }
+  } catch (err) { throw documentError("save", document, err); }
 }

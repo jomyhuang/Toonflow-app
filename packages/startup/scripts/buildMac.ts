@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "@toonflow/file";
+import { write } from "@toonflow/file/bun";
 import { join, resolve } from "node:path";
 
 const arch = process.argv[2] ?? process.arch;
@@ -25,7 +26,7 @@ if (!existsSync(archivePath)) {
   if (!response.ok) throw new Error(`下载 ThorVG 源码失败：HTTP ${response.status}`);
   const archive = await response.arrayBuffer();
   if (new Bun.CryptoHasher("sha256").update(archive).digest("hex") !== sourceHash) throw new Error("ThorVG 源码校验失败");
-  await Bun.write(archivePath, archive);
+  await write(archivePath, archive);
 }
 if (new Bun.CryptoHasher("sha256").update(readFileSync(archivePath)).digest("hex") !== sourceHash) throw new Error("缓存的 ThorVG 源码校验失败");
 await run(["tar", "-xf", archivePath, "-C", workDir]);

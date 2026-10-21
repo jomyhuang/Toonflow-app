@@ -5,7 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./skill": { "types": "./src/skill.d.ts", "default": "./skills/toonflow/SKILL.md" }
+    "./client": "./src/client.ts",
+    "./skill": {
+      "types": "./src/skill.d.ts",
+      "default": "./skills/toonflow/SKILL.md"
+    }
   },
   "bin": {
     "toonflow-mcp": "./src/stdio.ts"
@@ -15,11 +19,13 @@
     "typecheck": "tsc"
   },
   "dependencies": {
+    "@toonflow/file": "workspace:*",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "zod": "^4.6.2"
+    "zod": "^4.6.2",
+    "@toonflow/i18n": "workspace:*"
   },
   "peerDependencies": {
     "express": "^5.2.1"

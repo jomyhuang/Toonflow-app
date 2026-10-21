@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { loadMediaProviderSource } from "@/utils/media/provider";
+import { t, translateError } from "@/lib/i18n";
 
 export const providerDebugSchema = {
   source: z.string().min(1).max(2 * 1024 * 1024),
@@ -30,7 +31,7 @@ export async function runProviderSource(
   function redact(value: unknown) {
     let text = typeof value === "string" ? value : JSON.stringify(value, (key, item) => {
       if (secretFields.test(key)) return "••••••";
-      if (typeof item === "string" && item.length > 4000) return `[${item.length} 个字符]`;
+      if (typeof item === "string" && item.length > 4000) return t`[${item.length} 个字符]`;
       return item;
     }, 2) ?? "";
     for (const secret of secrets) text = text.replaceAll(secret, "••••••");
@@ -39,8 +40,8 @@ export async function runProviderSource(
       .slice(0, 16000);
   }
   function bodyText(body: unknown) {
-    if (typeof body !== "string") return body ? "[二进制或表单请求体]" : "";
-    if (body.length > 1024 * 1024) return `[请求体 ${body.length} 个字符]`;
+    if (typeof body !== "string") return body ? t`[二进制或表单请求体]` : "";
+    if (body.length > 1024 * 1024) return t`[请求体 ${body.length} 个字符]`;
     try { return redact(JSON.parse(body)); }
     catch { return redact(body); }
   }
@@ -69,7 +70,7 @@ export async function runProviderSource(
             body += decoder.decode(value.subarray(0, Math.max(0, 16000 - (size - value.byteLength))), { stream: true });
           }
           body += decoder.decode();
-          if (size >= 16000) body += "\n…响应已截断";
+          if (size >= 16000) body += t`\n…响应已截断`;
         } finally { void reader.cancel().catch(() => {}); }
       }
       report({ state: response.ok ? "success" : "error", status: response.status, duration: Math.round(performance.now() - start), response: bodyText(body) });
@@ -110,6 +111,6 @@ export async function runProviderSource(
     });
     send({ type: "result", assets: result, response: redact(result), duration: Math.round(performance.now() - startedAt) });
   } catch (error) {
-    send({ type: "error", message: redact(error instanceof Error ? error.message : String(error)), duration: Math.round(performance.now() - startedAt) });
+    send({ type: "error", message: redact(translateError(error)), duration: Math.round(performance.now() - startedAt) });
   }
 }

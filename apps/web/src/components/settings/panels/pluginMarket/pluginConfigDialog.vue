@@ -15,6 +15,7 @@ import { computed, ref, shallowRef, toRaw, watch } from "vue";
 import formCreate, { type Api, type Options } from "../../formCreate";
 import { ElMessage } from "element-plus";
 import type { Plugin } from "./types";
+import { extensionConfig, saveExtensionConfig } from "@/pages/workspace/panels/document/extensions";
 
 const { plugin, canManage } = defineProps<{ plugin: Plugin; canManage: boolean }>();
 const visible = defineModel<boolean>({ default: false });
@@ -39,10 +40,15 @@ async function saveConfig() {
   configError.value = "";
   try {
     if (!(await formApi.value.validate().catch(() => false))) return;
-    const path = plugin.type === "node" ? "nodes" : "tools";
-    const { data } = await axios.put(`/api/${path}/save`, { name: plugin.name, config: formApi.value.formData() }, { headers: { "x-toonflow-workspace": "1" } });
-    if (data.code !== 200) throw new Error(data.message || "保存插件配置失败");
-    plugin.config = data.data;
+    const path = plugin.type === "ext" ? "ext" : plugin.type === "node" ? "nodes" : "tools";
+    if (plugin.type === "ext") {
+      await saveExtensionConfig(plugin.name, formApi.value.formData());
+      plugin.config = extensionConfig(plugin.name);
+    } else {
+      const { data } = await axios.put(`/api/${path}/save`, { name: plugin.name, config: formApi.value.formData() }, { headers: { "x-toonflow-workspace": "1" } });
+      if (data.code !== 200) throw new Error(data.message || "保存插件配置失败");
+      plugin.config = data.data;
+    }
     if (plugin.type === "node") window.dispatchEvent(new Event("toonflow:node-config-updated"));
     visible.value = false;
     ElMessage.success("插件配置已保存");

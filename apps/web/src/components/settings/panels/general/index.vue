@@ -47,7 +47,7 @@
             :modelValue="generalSettings.canvasEdgeColorMode"
             aria-label="节点连线颜色模式"
             @change="(value) => updateGeneralSettings({ canvasEdgeColorMode: value })">
-            <el-option label="关闭" value="none" />
+            <el-option label="不使用高亮颜色" value="none" />
             <el-option label="跟随主题色" value="theme" />
             <el-option label="自选颜色" value="custom" />
           </el-select>
@@ -60,6 +60,7 @@
         </div>
       </div>
     </section>
+    <nodeMenuSettings />
     <canvasShortcuts />
   </div>
 </template>
@@ -67,6 +68,7 @@
 <script setup lang="ts">
 import { defaultUiSettings, generalSettings, uiSettings, updateGeneralSettings, updateUiSettings } from "@/stores/settings";
 import canvasShortcuts from "./canvasShortcuts.vue";
+import nodeMenuSettings from "./nodeMenuSettings.vue";
 </script>
 
 <style lang="scss" scoped>

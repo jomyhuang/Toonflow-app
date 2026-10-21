@@ -37,7 +37,7 @@
         <el-button size="small" :loading="saving" :disabled="portDraft === undefined || portDraft === (status?.preferredPort ?? mcpSettings.port)" @click="savePort">保存</el-button>
       </div>
       <p class="description">默认 10588，占用时自动顺延。保存后自动切换 MCP 端口，地址变化后请重新复制客户端配置。</p>
-      <el-input :modelValue="status?.endpoint ?? ''" readonly aria-label="MCP 服务地址" />
+      <el-input :modelValue="status?.endpoint ?? ''" dir="ltr" readonly aria-label="MCP 服务地址" />
       <p v-if="status?.port" class="description">当前本地监听端口：{{ status.port }}</p>
       <p v-if="status?.port && status.port !== status.preferredPort && !status.error" class="description">首选端口 {{ status.preferredPort }} 已被占用，已顺延至 {{ status.port }}。</p>
       <el-alert v-if="status?.error" class="listenerError" :title="status.error" type="error" :closable="false" showIcon />
@@ -63,7 +63,7 @@
     </el-dialog>
     <el-dialog v-model="copyVisible" :title="`复制 ${copyTitle}`" width="min(680px, calc(100vw - 32px))" alignCenter appendToBody @opened="copyInput?.select()">
       <p class="copyHint">浏览器无法自动复制，请选中文本后手动复制。{{ copyHasCredential ? "此配置包含访问凭证，请仅提供给可信的客户端。" : "" }}</p>
-      <el-input ref="copyInput" :modelValue="copyContent" type="textarea" :autosize="{ minRows: 8, maxRows: 18 }" readonly :aria-label="copyTitle" />
+      <el-input ref="copyInput" :modelValue="copyContent" type="textarea" dir="ltr" :autosize="{ minRows: 8, maxRows: 18 }" readonly :aria-label="copyTitle" />
     </el-dialog>
   </div>
 </template>

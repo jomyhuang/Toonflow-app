@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import conf from "@/utils/conf";
+import { isMobileLinkRequest } from "@/utils/mobileLink";
+import { getRuntimePlatform } from "@/lib/platform";
 
 export const controlStateSchema = z.object({
   directory: z.string().max(4096).nullable(),
@@ -30,8 +32,7 @@ export function getMcpSettings() {
 }
 
 function allowedHost(req: Request) {
-  const local = process.env.toonflowDesktop === "1" || (process.env.NODE_ENV === "dev" && ["win32", "darwin"].includes(process.platform));
-  return !local || ["localhost", "127.0.0.1", "[::1]"].includes(req.hostname);
+  return isMobileLinkRequest(req) || !getRuntimePlatform().requiresLocalHost || ["localhost", "127.0.0.1", "[::1]"].includes(req.hostname);
 }
 
 export function getAppOrigin(req: Request) {
@@ -132,7 +133,8 @@ export function callControl(connectionId: string, name: string, args: Record<str
       if (!connection.response.destroyed) connection.response.write(`data: ${JSON.stringify({ type: "cancel", callId })}\n\n`);
       finish({ error: "控制命令已取消或超时" });
     };
-    const timer = setTimeout(abort, 120000);
+    // ACT: A2A/MCP 的转写与 Agent 共用浏览器 ASR 超时，避免长音频在两分钟时被截断。
+    const timer = name === "transcribeAudio" ? undefined : setTimeout(abort, 120000);
     connection.pending = { id: callId, finish };
     signal.addEventListener("abort", abort, { once: true });
     connection.response.write(`data: ${JSON.stringify({ type: "call", callId, name, args, directory })}\n\n`);

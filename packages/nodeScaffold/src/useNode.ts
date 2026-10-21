@@ -7,7 +7,9 @@ import { nodeTools } from "./nodeTools";
 import { useNodeFiles } from "./workspaceFiles";
 import { useNodeAi } from "./nodeAi";
 import { useNodeFfmpeg } from "./nodeFfmpeg";
+import { useNodeAsr } from "./nodeAsr";
 import { useNodePreviewReady } from "./useNodePreviewReady";
+import type { NodeDocumentContext } from "./nodeDocument";
 
 export type NodeOptions<T extends NodeOutputs = NodeOutputs> = {
   label?: string;
@@ -18,6 +20,7 @@ export type NodeOptions<T extends NodeOutputs = NodeOutputs> = {
 
 export function useNode<T extends NodeOutputs = NodeOutputs>(options: NodeOptions<T> = {}) {
   const { id, node } = useFlowNode<NodeData>();
+  const documentContext = inject<NodeDocumentContext | undefined>("nodeDocument", undefined);
   const getNodeConfig = inject<((nodeType: string) => Record<string, unknown>) | undefined>("nodeConfig", undefined);
   const config = computed(() => readonly(getNodeConfig?.(node.type ?? "") ?? {}));
   const previewReady = useNodePreviewReady();
@@ -53,12 +56,15 @@ export function useNode<T extends NodeOutputs = NodeOutputs>(options: NodeOption
     nodeTools,
     ai: useNodeAi(),
     ffmpeg: useNodeFfmpeg(),
+    asr: useNodeAsr(),
     files: {
       getWorkspaceFiles,
       useFileUrl,
       uploadFile: (file: File) => uploadFile(id, file),
       removeNodeFiles: () => removeNodeFiles(id),
     },
-    updateNodeInternals: () => updateNodeInternals([id]),
+    updateNodeInternals: () => {
+      if (!documentContext?.targets.has(id)) updateNodeInternals([id]);
+    },
   };
 }

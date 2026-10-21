@@ -272,6 +272,7 @@ async function runWorkflow(context: ProviderContext, workflow: ComfyWorkflow) {
 export default {
   id: "comfyuiLocal" as const,
   label: "ComfyUI 本地",
+  icon: "",
   version,
   readme:
     "把本机 ComfyUI 的工作流变成 Toonflow 模型。\n\n使用步骤：\n1. 在 ComfyUI 里摆好能正常出图/出视频的工作流；\n2. 「工作流 → 导出（API）」得到 JSON，全文粘贴到对应设置项；\n3. 填写正向提示词所在的节点 ID（默认模板是 6）；\n4. 视频如需首帧，再填首帧 LoadImage 节点 ID。\n\n生成时会自动随机化工作流里的 seed；分辨率、时长等仍由工作流本身决定。",
@@ -292,7 +293,9 @@ export default {
       const refIds = String(this.config.imageEditRefNodeIds || "").split(",").map(item => item.trim()).filter(Boolean);
       if (!refIds.length) throw new Error("本次带了参考图，但设置里没填「参考图 LoadImage 节点 ID」（逗号分隔）");
       const base = trimBase(this.config.baseUrl);
-      const uploaded = await uploadImage(this, base, request.images[0]);
+      const refImage = request.images?.[0];
+      if (!refImage) throw new Error("本次带了参考图，但参考图为空");
+      const uploaded = await uploadImage(this, base, refImage);
       for (const refId of refIds) {
         const refNode = workflow[refId];
         if (!refNode || !refNode.inputs) throw new Error(`工作流里找不到参考图节点 ${refId}`);

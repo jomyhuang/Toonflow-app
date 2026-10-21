@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "@toonflow/file";
 import { parseArgs } from "node:util";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
+import { detectLocale, msg, translate } from "@toonflow/i18n";
+
+const locale = detectLocale([Intl.DateTimeFormat().resolvedOptions().locale]);
+function t(strings: TemplateStringsArray, ...values: unknown[]) { return translate(msg(strings, ...values), undefined, locale); }
 
 async function main() {
   const { values } = parseArgs({ options: {
@@ -14,7 +18,7 @@ async function main() {
     help: { type: "boolean" },
   } });
   if (values.help) {
-    process.stderr.write("toonflow-mcp --url <MCP URL> --token-env <环境变量名>\ntoonflow-mcp --runtime <运行信息文件>\n");
+    process.stderr.write(t`toonflow-mcp --url <MCP URL> --token-env <环境变量名>\ntoonflow-mcp --runtime <运行信息文件>\n`);
     return;
   }
   if (Boolean(values.url) === Boolean(values.runtime)) throw new Error("请指定 --url 或 --runtime，二者只能选择一个");
@@ -30,7 +34,7 @@ async function main() {
     endpoint = runtime.url;
     token = runtime.token;
   }
-  if (!token) throw new Error(`未找到 MCP 访问凭证，请设置 ${values["token-env"]}`);
+  if (!token) throw new Error(t`未找到 MCP 访问凭证，请设置 ${values["token-env"]}`);
   const url = new URL(endpoint!);
   const local = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
   if (!(["http:", "https:"].includes(url.protocol)) || (url.protocol === "http:" && !local)) {
@@ -39,7 +43,7 @@ async function main() {
   if (values.runtime && !local) throw new Error("运行信息文件只允许指向本机 Toonflow");
   if (url.username || url.password) throw new Error("MCP URL 不允许包含账号或密码");
   const transport = new StreamableHTTPClientTransport(url, {
-    requestInit: { headers: { Authorization: `Bearer ${token}` } },
+    requestInit: { headers: { Authorization: `Bearer ${token}`, "Accept-Language": locale } },
   });
   const client = new Client({ name: "toonflow-stdio", version: "0.0.0" });
   await client.connect(transport);
@@ -73,6 +77,6 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(translate(error instanceof Error ? error.message : String(error), undefined, locale));
   process.exitCode = 1;
 });

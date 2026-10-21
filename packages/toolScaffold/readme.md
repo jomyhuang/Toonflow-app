@@ -14,7 +14,7 @@
 
 `import { z } from "zod"` 无需修改：构建时将 `zod` 转为外部模块 `toonflow:tool-zod`，Server 在加载工具前通过 Bun 虚拟模块提供完整的 Zod 4 导出。仅共享精确的 `zod` 导入，子路径仍随工具打包。发布这些新产物时须同步更新 Server；旧版自带 Zod 的工具仍可加载。
 
-在仓库根目录运行 `bun run build:tools` 会清空 `build/tools` 后构建全部工具，不改动 `data/tools`；`dev:desktop` 会先执行 `dev:plugins` 同步开发产物。在“设置 → 工具”中安装 `.tool.js`、启停、卸载或编辑配置；配置写入 `data/settings.json` 的 `toolConfigs`，下一次发送消息时生效。桌面构建会携带默认工具，首次启动初始化后，用户卸载的工具不会因普通重启而自动恢复。
+在仓库根目录运行 `bun run build:tools` 会清空 `build/tools` 后构建全部工具，不改动 `data/tools`；`dev:desktop` 会先执行 `dev:plugins` 同步开发产物。在“设置 → 插件市场”中安装 `.tool.js`、启停、卸载或编辑配置；配置写入 `data/settings.json` 的 `toolConfigs`，下一次发送消息时生效。桌面构建会携带默认工具，首次启动初始化后，用户卸载的工具不会因普通重启而自动恢复。
 
 文件首行 `/*! toonflowTool:<JSON> */` 包含 `ToolMetadata`，其中 `version` 为工具版本，随单个 `.tool.js` 文件安装和分享。服务端可以读取这段数据而不执行插件；旧工具没有版本时仍可加载，列表返回空字符串表示未知版本，不推断或补造版本号。
 
@@ -24,9 +24,15 @@
 
 `/api/tools/renderers` 仅列出已启用的组件映射及内容版本地址，`/api/tools/client` 只下发对应浏览器代码与样式，不执行或暴露服务端入口、配置和密钥。web 使用 `@toonflow/tools-scaffold/client` 的 `loadToolComponent(tool.name)`，统一向组件传入 `{ tool: ToolCall, directory?: string }`；无组件时展示普通工具消息，加载失败时提示用户停止后重试。历史消息可能只有 `args/result`，组件不能假定一定存在实时交互信息。`askUser` 的回答、跳过和历史展示均由包内 `src/questionCard.vue` 维护，web 不导入该组件。
 
-`createTools(context)` 返回 Pi 的工具定义数组，一个插件可提供多个工具。宿主传入当前工作区 `cwd`、仅属于该工具且已校验的配置 `config`、安全路径解析 `resolvePath`、带锁的原子写入 `writeFile`，以及 Pi SDK 工具构造函数。不传入应用全局设置或其他工具的配置；工具需要的密钥通过自身配置项填写。工作区文件插件通过宿主方法限制路径；只读模式只注册 `read` 与 `ls`。
+`createTools(context)` 返回 Pi 的工具定义数组，一个插件可提供多个工具。宿主传入当前工作区 `cwd`、仅属于该工具且已校验的配置 `config`、统一文件能力 `files`，以及 Pi SDK 工具构造函数。不传入应用全局设置或其他工具的配置；工具需要的密钥通过自身配置项填写。工作区文件插件通过宿主方法限制路径；只读模式只注册 `read` 与 `ls`。
+
+`context.files` 提供 `readFile`、`access`、`stat`、`readdir`、`detectImageMimeType`、`writeFile`、`mkdir`、`rename`、`remove` 和 `copyFile`，全部接入宿主的统一文件层。读取方法第二个参数 `readOnly=true` 时额外允许读取全局技能目录；写入始终限制在当前工作区。`writeFile(path, content, exclusive?)` 原子保存，`exclusive=true` 禁止覆盖；`mkdir(path, recursive?)` 和 `remove(path, recursive?)` 默认不递归；`rename` 禁止覆盖已有目标；`copyFile(path, target, exclusive?)` 默认允许覆盖。旧 `resolvePath`、`writeFile` 入口继续保留，新工具使用 `files`，避免直接导入文件 API 或把文件层实现打入插件。已有直接调用系统 API 的旧工具需要更新其源码后重新构建。
 
 `context.skills` 提供统一的技能扫描、读取、新建和修改，复用宿主的 SDK 扫描与文件落盘。`skillOperator` 据此操作工作区 `skill/` 和全局 `data/skills/`，无需把 Pi SDK 打入工具。读取、新建、修改默认开启，可在工具配置中分别关闭；目录查询始终保留，普通工作区文件的写入范围不因此扩大。
+
+`await context.asr.transcribe(path, { lang?, signal? })` 使用 `@toonflow/asr` 将工作区音频识别为文本，`path` 支持工作区内的相对路径或绝对路径，默认语言为 `zh-CN`。音频不能为空且不能超过 100 MB。工具在服务端执行，识别通过本轮绑定画布转交发起对话的浏览器；未连接画布时明确报错。此宿主能力不额外注册 Agent 工具。浏览器须支持音轨识别，API 存在不保证识别服务可用；当前复用画布通道的串行队列，转写不受普通画布操作的 120 秒总时限限制，沿用 ASR 的 30 秒无响应/播放停滞与 15 秒收尾超时。停止整轮对话或切换工作区会取消浏览器识别；单独取消工具的 `signal` 会立即结束服务端等待，浏览器仍可能运行至自然结束或自身超时。浏览器原生识别可能使用其供应商的在线服务，不能视为离线识别。
+
+工具的浏览器组件可从 `@toonflow/tools-scaffold/client` 导入 `createBrowserAsr`、`isBrowserAsrSupported`、`isBrowserAudioAsrSupported`、`transcribeBrowserAudio` 及相关类型，直接复用 `@toonflow/asr`。这些浏览器函数不从服务端 `runtime` 入口导出。
 
 `await context.ffmpeg(signal?)` 获取绑定 `context.cwd` 的原生 `@renmu/fluent-ffmpeg` 工厂，全局工具和团队私有工具均可使用；工具无需打包执行库。工厂构造参数、链式方法、事件、流、`.run()`、`.save()`、`.pipe()`、`.clone()` 和 `ffprobe` 回调均沿用原生 API，不再记录 JSON 计划。
 

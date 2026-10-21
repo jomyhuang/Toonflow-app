@@ -1,6 +1,7 @@
 <template>
   <el-card
     v-if="visible"
+    ref="toolbar"
     class="selectionToolbar nodrag nopan nowheel"
     shadow="never"
     :bodyStyle="{ padding: '4px' }"
@@ -12,6 +13,14 @@
     @contextmenu.stop
     @keydown.stop>
     <div class="toolbarActions">
+      <el-button
+        v-for="action in layoutActions"
+        :key="action.mode"
+        text
+        :icon="action.icon"
+        :disabled="!canArrangeSelection"
+        @click="operate(action.mode)">{{ action.label }}</el-button>
+      <span class="toolbarDivider" aria-hidden="true" />
       <el-button text :icon="IconCopyPlus" :disabled="busy || disabled" @click="operate('duplicate')">创建副本</el-button>
       <el-button text :icon="IconBoxMultiple" :disabled="busy || disabled" @click="operate('group')">打组</el-button>
       <el-button text :icon="IconDeselect" :disabled="busy || disabled || !hasGroup" @click="operate('ungroup')">解组</el-button>
@@ -23,9 +32,13 @@
 import { computed, nextTick, ref } from "vue";
 import { getRectOfNodes, useVueFlow, type GraphNode, type Node, type XYPosition } from "@vue-flow/core";
 import { ElButton, ElCard, ElMessage } from "element-plus";
-import { IconCopyPlus, IconBoxMultiple, IconDeselect } from "@tabler/icons-vue";
+import {
+  IconCopyPlus, IconBoxMultiple, IconDeselect,
+  IconLayoutGrid, IconLayoutColumns, IconLayoutRows,
+} from "@tabler/icons-vue";
 import { useNodeEvent } from "@toonflow/nodes-scaffold/nodeEvent";
 import { finishGroupDrag, getSelectionRoots, getSelectionTree } from "../selectionNodes";
+import { arrangeSelection, type ArrangeSelectionMode } from "../arrangeSelection";
 
 const props = defineProps<{
   batchHistory: (action: () => Promise<void>) => Promise<void>;
@@ -33,14 +46,30 @@ const props = defineProps<{
   disabled?: boolean;
 }>();
 const flow = useVueFlow();
+const toolbar = ref<InstanceType<typeof ElCard>>();
 const busy = ref(false);
+const layoutActions = [
+  { mode: "horizontal", label: "水平排列", icon: IconLayoutColumns },
+  { mode: "vertical", label: "垂直排列", icon: IconLayoutRows },
+  { mode: "grid", label: "宫格排列", icon: IconLayoutGrid },
+] as const;
+const selectionRoots = computed(() => getSelectionRoots(flow.getSelectedNodes.value, flow.getNodes.value));
+const canArrangeSelection = computed(() => !busy.value && !props.disabled && selectionRoots.value.length > 1
+  && selectionRoots.value.every(node => node.draggable !== false
+    && Number.isFinite(node.dimensions.width) && node.dimensions.width > 0
+    && Number.isFinite(node.dimensions.height) && node.dimensions.height > 0));
 const hasGroup = computed(() => flow.getSelectedNodes.value.some(node => node.type === "canvasGroup"));
 const visible = computed(() => !props.disabled && !flow.userSelectionActive.value && flow.getSelectedNodes.value.length > 0
   && (flow.nodesSelectionActive.value || hasGroup.value));
 const toolbarStyle = computed(() => {
   const bounds = getRectOfNodes(flow.getSelectedNodes.value);
   const { x, y, zoom } = flow.viewport.value;
-  return { left: `${x + (bounds.x + bounds.width / 2) * zoom}px`, top: `${y + bounds.y * zoom - 12 - (hasGroup.value ? 30 * zoom : 0)}px` };
+  const width = toolbar.value?.$el.offsetWidth ?? 0;
+  const height = toolbar.value?.$el.offsetHeight ?? 0;
+  const left = Math.max(width / 2 + 8, Math.min(x + (bounds.x + bounds.width / 2) * zoom, flow.dimensions.value.width - width / 2 - 8));
+  // ACT: 顶部导航约占 56px，留出 8px 间隔；高度变化时再按导航实际尺寸定位。
+  const top = Math.max(height + 64, Math.min(y + bounds.y * zoom - 12 - (hasGroup.value ? 30 * zoom : 0), flow.dimensions.value.height - 8));
+  return { left: `${left}px`, top: `${top}px` };
 });
 
 async function duplicateNodes(selection: GraphNode[], signal: AbortSignal, withEdges = true, positions?: Map<string, XYPosition>) {
@@ -244,7 +273,7 @@ function startDragCopy(selection: GraphNode[], withEdges: boolean) {
   };
 }
 
-async function operate(command: "duplicate" | "group" | "ungroup" | "mergeGroup") {
+async function operate(command: "duplicate" | "group" | "ungroup" | "mergeGroup" | ArrangeSelectionMode) {
   if (busy.value || props.disabled) return;
   const selection = [...flow.getSelectedNodes.value];
   if (!selection.length) return;
@@ -253,10 +282,14 @@ async function operate(command: "duplicate" | "group" | "ungroup" | "mergeGroup"
   try {
     await props.batchHistory(async () => {
       signal.throwIfAborted();
-      const ids = command === "duplicate" ? (await duplicateNodes(selection, signal)).rootIds
-        : command === "group" ? groupNodes(selection)
-        : command === "mergeGroup" ? mergeGroups(selection) : ungroupNodes(selection);
-      await selectNodes(ids, signal);
+      if (command === "duplicate" || command === "group" || command === "ungroup" || command === "mergeGroup") {
+        const ids = command === "duplicate" ? (await duplicateNodes(selection, signal)).rootIds
+          : command === "group" ? groupNodes(selection)
+          : command === "mergeGroup" ? mergeGroups(selection) : ungroupNodes(selection);
+        await selectNodes(ids, signal);
+      } else {
+        arrangeSelection(flow, selection, command);
+      }
     });
   } catch (error) {
     if (!signal.aborted) ElMessage.error(error instanceof Error ? error.message : "选区操作失败");
@@ -278,12 +311,20 @@ defineExpose({ operate, startDragCopy, busy });
   .toolbarActions {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 2px;
+    white-space: nowrap;
 
     .el-button {
       height: 28px;
       margin: 0;
       padding: 0 8px;
+    }
+
+    .toolbarDivider {
+      height: 16px;
+      margin: 0 4px;
+      border-left: 1px solid var(--el-border-color-lighter);
     }
   }
 }

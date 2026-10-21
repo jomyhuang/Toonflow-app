@@ -1,5 +1,6 @@
-import { dirname, isAbsolute, resolve } from "node:path";
-import { realpath, stat, mkdir, readdir, lstat, rm, rmdir, readFile } from "node:fs/promises";
+import { t } from "@/lib/i18n";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { realpath, stat, mkdir, readdir, lstat, rm, rmdir, readFile } from "@toonflow/file";
 import { z } from "zod";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext } from "@toonflow/tools-scaffold/runtime";
@@ -11,6 +12,8 @@ import { callControl, getConnection, listConnections } from "@/utils/mcp/control
 import { appOperations, runAppOperation } from "@/utils/mcp/operations";
 import { listTools } from "@/utils/plugins/tools";
 import { isWithin, lockWorkspaceFiles, protectWorkspaceRoot, renameWorkspaceFile, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
+import { getRuntimePlatform } from "@/lib/platform";
+import { thinkingLevels } from "@/lib/modelReasoning";
 
 const targetSchema = z.strictObject({ connectionId: z.uuid().optional(), directory: z.string().min(1).max(4096).optional(), canvasId: z.string().min(1).max(256).optional() });
 const requestSchema = z.strictObject({ target: targetSchema.optional(), args: z.record(z.string(), z.unknown()) });
@@ -24,8 +27,7 @@ async function resolveDirectory(directory?: string) {
   if (!directory || !isAbsolute(directory)) throw new Error("请在 target.directory 指定绝对工作目录，或先打开项目");
   const path = await realpath(directory);
   if (!(await stat(path)).isDirectory()) throw new Error("工作目录不是文件夹");
-  const desktop = ["win32", "darwin"].includes(process.platform) && (process.env.NODE_ENV === "dev" || process.env.toonflowDesktop === "1");
-  if (!desktop) {
+  if (!getRuntimePlatform().local) {
     const root = await realpath(resolve(dirname(conf.path), "workspaces"));
     if (!isWithin(root, path)) throw new Error("服务器部署只能使用 data/workspaces 内的工作区");
   }
@@ -79,13 +81,16 @@ export function redactSecrets(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /(?:api.?key|access.?token|refresh.?token|password|secret|authorization)$|^token$/i.test(key) ? (item ? "[REDACTED]" : "") : redactSecrets(item)]));
 }
 
-function assertFileNotOpen(directory: string, path: string) {
+async function assertFileNotOpen(directory: string, path: string) {
+  const target = (await resolveWorkspacePath(directory, relative(directory, resolve(directory, path)), true)).path;
   for (const { state } of listConnections()) {
     if (state.directory !== directory) continue;
     const document = state.document as { selection?: { filePath?: string; canvasPath?: string } } | undefined;
     const openPaths = [state.canvasId, document?.selection?.filePath, document?.selection?.canvasPath];
-    if (openPaths.some(file => file && isWithin(resolve(directory, path), resolve(directory, file)))) {
-      throw new Error("文件正在 Toonflow 中打开，请使用画布或文档工具修改，关闭后再执行文件操作");
+    for (const file of openPaths) {
+      if (!file) continue;
+      const opened = (await resolveWorkspacePath(directory, relative(directory, resolve(directory, file)), true)).path;
+      if (isWithin(target, opened)) throw new Error("文件正在 Toonflow 中打开，请使用画布或文档工具修改，关闭后再执行文件操作");
     }
   }
 }
@@ -114,24 +119,24 @@ export async function getMcpTools(): Promise<McpTool[]> {
   }
   const canvasStub: CanvasContext = { id: "mcp", tools: [], async call() { throw new Error("尚未绑定画布"); } };
   // ACT: 插件损坏时仍保留应用管理工具，允许读取错误并修复插件。
-  const definitions = await createAgentTools(dirname(conf.path), canvasStub).catch(error => {
+  const definitions = await createAgentTools(dirname(conf.path), canvasStub, undefined, false).catch(error => {
     pluginError = error instanceof Error ? error.message : String(error);
     return [];
   });
   for (const definition of definitions) {
-    if (tools.some(tool => tool.name === definition.name)) throw new Error(`MCP 工具名称重复：${definition.name}`);
+    if (tools.some(tool => tool.name === definition.name)) throw new Error(t`MCP 工具名称重复：${definition.name}`);
     tools.push(wrapTool(definition.name, [definition.description, ...(definition.promptGuidelines ?? [])].join("\n"), definition.parameters, async (args, target, signal) => {
       const { connection, directory } = await resolveTarget(target);
-      if (["write", "edit"].includes(definition.name) && typeof args.path === "string") assertFileNotOpen(directory!, args.path);
+      if (["write", "edit"].includes(definition.name) && typeof args.path === "string") await assertFileNotOpen(directory!, args.path);
       const canvas: CanvasContext | undefined = connection ? {
         id: connection.state.canvasId ?? "mcp", tools: connection.state.tools,
         call: (request, callSignal) => callControl(connection.id, request.name, request.args, callSignal ?? signal, directory),
       } : undefined;
-      const current = (await createAgentTools(directory!, canvas)).find(tool => tool.name === definition.name);
+      const current = (await createAgentTools(directory!, canvas, undefined, false)).find(tool => tool.name === definition.name);
       if (!current) throw new Error("工具已禁用，或所需 Toonflow 页面未连接，请重新读取工具列表");
       // ACT: 现有插件依赖 createTools 注入的宿主能力；MCP 没有 Pi 对话，访问会话能力时明确报错。
       const context = new Proxy({ cwd: directory, mode: "rpc", hasUI: false, model: undefined, signal }, {
-        get(value, key) { if (Reflect.has(value, key)) return Reflect.get(value, key); throw new Error(`MCP 不提供内置 Agent 会话能力：${String(key)}`); },
+        get(value, key) { if (Reflect.has(value, key)) return Reflect.get(value, key); throw new Error(t`MCP 不提供内置 Agent 会话能力：${String(key)}`); },
       }) as unknown as ExtensionContext;
       return current.execute(crypto.randomUUID(), args, signal, undefined, context);
     }));
@@ -156,10 +161,13 @@ export async function getMcpTools(): Promise<McpTool[]> {
       return { path: args.path, base64: (await readFile(source.path, { signal })).toString("base64") };
     }
     protectWorkspaceRoot(directory!, source.path);
-    assertFileNotOpen(directory!, args.path);
+    await assertFileNotOpen(directory!, args.path);
     const destination = args.action === "rename" && args.target ? await resolveWorkspacePath(directory!, args.target) : undefined;
     if (args.action === "rename" && !destination) throw new Error("重命名需要提供 args.target");
-    if (destination) protectWorkspaceRoot(directory!, destination.path);
+    if (destination) {
+      protectWorkspaceRoot(directory!, destination.path);
+      destination.path = resolve(dirname(destination.path), basename(resolve(directory!, args.target!)));
+    }
     const release = lockWorkspaceFiles([source.path, ...(destination ? [destination.path] : [])]);
     try {
       if (args.action === "writeBinary") {
@@ -205,7 +213,7 @@ export async function getMcpTools(): Promise<McpTool[]> {
   }));
   const runAgentSchema = z.strictObject({
     prompt: z.string().trim().min(1), providerId: z.string().min(1), modelId: z.string().min(1),
-    sessionFile: z.string().regex(/^[\w-]+\.jsonl$/).optional(), thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional(),
+    sessionFile: z.string().regex(/^[\w-]+\.jsonl$/).optional(), thinkingLevel: z.enum(thinkingLevels).optional(),
   });
   tools.push(wrapTool("runAgent", "按用户请求调用 Toonflow 内置 Agent，等待本轮完成并返回对话文件与回复；会使用配置的模型。外部 Agent 可直接操作其他工具，仅需要委托内置 Agent 时调用。支持 MCP 取消，历史保存到工作区。", z.toJSONSchema(runAgentSchema), async (input, target, signal) => {
     const args = runAgentSchema.parse(input);

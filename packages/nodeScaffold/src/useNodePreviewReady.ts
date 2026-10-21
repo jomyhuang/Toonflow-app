@@ -1,12 +1,18 @@
-import { ref, watch, type Ref } from "vue";
+import { inject, ref, watch, type Ref } from "vue";
 import { useNode, useNodeId } from "@vue-flow/core";
+import type { NodeDocumentContext } from "./nodeDocument";
 
 const previewObserverKey = Symbol.for("toonflow.nodePreviewObserver");
 type PreviewObserver = { observer: IntersectionObserver; targets: Map<Element, Set<Ref<boolean>>> };
 
 export function useNodePreviewReady() {
-  const ready = ref(!useNodeId() || typeof IntersectionObserver === "undefined");
+  const nodeId = useNodeId();
+  const documentContext = inject<NodeDocumentContext | undefined>("nodeDocument", undefined);
+  const ready = ref(!nodeId || typeof IntersectionObserver === "undefined");
   if (ready.value) return ready;
+  watch(() => documentContext?.targets.has(nodeId), visible => {
+    if (visible) ready.value = true;
+  }, { immediate: true, flush: "sync" });
   const { nodeEl } = useNode();
   const host = globalThis as typeof globalThis & { [previewObserverKey]?: PreviewObserver };
   if (!host[previewObserverKey]) {

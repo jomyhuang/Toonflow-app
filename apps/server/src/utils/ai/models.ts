@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 import { z } from "zod";
 
 const modelSchema = z.object({
@@ -23,7 +24,7 @@ export async function fetchProviderModels({ apiUrl, protocol, apiKey }: { apiUrl
   const signal = AbortSignal.timeout(30000);
   while (true) {
     const response = await fetch(url, { headers, signal, redirect: "error" });
-    if (!response.ok) throw new Error(`获取模型列表失败（HTTP ${response.status}），请检查 API 地址、协议和密钥`);
+    if (!response.ok) throw new Error(t`获取模型列表失败（HTTP ${response.status}），请检查 API 地址、协议和密钥`);
     const result = z.object({
       data: z.array(modelSchema),
       has_more: z.boolean().optional(), last_id: z.string().nullable().optional(),

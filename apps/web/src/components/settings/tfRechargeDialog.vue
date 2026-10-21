@@ -47,7 +47,7 @@
           <el-text size="small" type="info">订单号</el-text>
           <span>{{ payment.orderNumber }}</span>
         </div>
-        <el-text size="small" type="info">支付后关闭窗口，将自动刷新账户余额。</el-text>
+        <el-text size="small" type="info">完成支付后，关闭此充值弹窗以刷新账户余额。</el-text>
       </div>
       <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" showIcon />
     </div>
@@ -61,6 +61,7 @@
 
 <script setup lang="ts">
 import axios from "axios";
+import { locale } from "@toonflow/i18n/vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { IconBrandAlipay, IconBrandWechat, IconCreditCard, IconExternalLink, IconRefresh } from "@tabler/icons-vue";
 import tf, { type TfPayment, type TfPayParams, type TfRechargeSku } from "@/lib/tf";
@@ -77,7 +78,7 @@ const payment = ref<TfPayment>();
 const paymentAmount = ref(0);
 const creating = ref(false);
 const errorMessage = ref("");
-const moneyFormat = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" });
+const moneyFormat = computed(() => new Intl.NumberFormat(locale.value, { style: "currency", currency: "CNY" }));
 const selectedAmount = computed(() => selectedSkuId.value === -1 ? amount.value : skus.value.find(sku => sku.id === selectedSkuId.value)?.price);
 const canPay = computed(() => !!props.apiKey.trim() && !loadingSkus.value && typeof selectedAmount.value === "number"
   && Number.isFinite(selectedAmount.value) && selectedAmount.value >= 0.01 && (selectedSkuId.value !== -1 || selectedAmount.value <= 50000));

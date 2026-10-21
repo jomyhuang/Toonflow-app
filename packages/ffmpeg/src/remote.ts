@@ -1,6 +1,10 @@
+import { msg } from "@toonflow/i18n";
+import { messageError } from "@toonflow/i18n/errors";
 import { chainMethods, queryMethods, runMethods } from "./browserTypes";
 import type { BrowserFfmpegRequest, FfmpegCall, FfmpegRemoteEvent } from "./browserTypes";
 import type { FfmpegCommand, FfmpegFactory } from "./types";
+
+export { chainMethods, queryMethods, runMethods } from "./browserTypes";
 
 const chainNames = new Set<string>(chainMethods);
 const queryNames = new Set<string>(queryMethods);
@@ -10,7 +14,7 @@ const outputNames = new Set(["output", "addOutput", "save", "saveToFile", "conca
 
 function serializeError(error: unknown) {
   return error instanceof Error
-    ? { name: error.name, message: error.message, ...("code" in error ? { code: error.code } : {}) }
+    ? { name: error.name, message: error.message, ...("code" in error ? { code: error.code } : {}), ...("i18nMessage" in error ? { i18nMessage: error.i18nMessage } : {}) }
     : { name: "Error", message: String(error) };
 }
 
@@ -32,11 +36,11 @@ export async function executeRemoteFfmpeg(
   try {
     signal.throwIfAborted();
     for (const call of request.calls) {
-      if (!chainNames.has(call.method)) throw new Error(`FFmpeg 配置方法不可用：${call.method}`);
+      if (!chainNames.has(call.method)) throw messageError(msg`FFmpeg 配置方法不可用：${call.method}`);
     }
     const operation = request.operation;
     if (!queryNames.has(operation.method) && !runNames.has(operation.method)) {
-      throw new Error(`FFmpeg 执行方法不可用：${operation.method}`);
+      throw messageError(msg`FFmpeg 执行方法不可用：${operation.method}`);
     }
     let command = factory(request.options);
     for (const call of request.calls) command = invoke(command, call) as FfmpegCommand;
@@ -45,6 +49,10 @@ export async function executeRemoteFfmpeg(
       const send = (event: string, args: unknown[]) => { if (!finished) emit({ event, args }); };
       const finish = (event: string, args: unknown[]) => {
         if (finished) return;
+        if (signal.aborted) {
+          event = "error";
+          args = [serializeError(signal.reason ?? new DOMException("FFmpeg 已取消", "AbortError"))];
+        }
         send(event, args);
         finished = true;
         signal.removeEventListener("abort", cancel);
@@ -52,8 +60,8 @@ export async function executeRemoteFfmpeg(
       };
       const fail = (error: unknown, ...args: unknown[]) => finish("error", [serializeError(error), ...args]);
       const cancel = () => {
-        command.kill("SIGKILL");
-        fail(signal.reason ?? new DOMException("FFmpeg 已取消", "AbortError"));
+        // ACT: kill 只发送信号；等原生完成事件再返回，调用方才能安全清理输出文件。
+        if (!queryNames.has(operation.method)) command.kill("SIGKILL");
       };
       signal.addEventListener("abort", cancel, { once: true });
       // ACT: 取消可能早于 spawn；保留监听，准备阶段结束后立即终止，且接住迟到的 error。
@@ -69,7 +77,7 @@ export async function executeRemoteFfmpeg(
       try {
         signal.throwIfAborted();
         if (queryNames.has(operation.method)) {
-          // ACT: fluent 未公开查询子进程，取消只能停止等待；转换命令由上面的 kill 终止。
+          // ACT: fluent 未公开查询子进程；取消后等查询回调释放文件，不等待查询不会触发的 start。
           invoke(command, operation, [(error: unknown, data: unknown) => error ? fail(error) : finish("result", [data])]);
         } else {
           invoke(command, operation);

@@ -4,6 +4,7 @@
       <nav class="marketNav" aria-label="插件列表">
         <button class="navButton" type="button" :aria-pressed="isMarketTab" @click="activeTab = 'discover'">发现插件</button>
         <button class="navButton" type="button" :aria-pressed="activeTab === 'installed'" @click="activeTab = 'installed'">已安装</button>
+        <button class="navButton" type="button" :aria-pressed="activeTab === 'mcp'" @click="activeTab = 'mcp'">MCP</button>
         <button class="navButton" type="button" :aria-pressed="activeTab === 'ffmpeg'" @click="activeTab = 'ffmpeg'">FFmpeg</button>
       </nav>
       <div class="marketActions">
@@ -14,6 +15,7 @@
           开发者文档
         </el-button>
         <template v-if="activeTab === 'installed'">
+          <el-button v-if="selectedType === 'ext' || selectedType === 'all'" size="small" :icon="IconSettings" @click="associationsVisible = true">默认打开方式</el-button>
           <el-button size="small" type="primary" :icon="IconUpload" :loading="installing" aria-label="安装本地插件" @click="pluginFileInput?.click()">
             安装插件
           </el-button>
@@ -24,7 +26,7 @@
           </template>
         </template>
       </div>
-      <div v-if="activeTab !== 'ffmpeg'" class="typeFilters" role="group" aria-label="插件类型">
+      <div v-if="isMarketTab || activeTab === 'installed'" class="typeFilters" role="group" aria-label="插件类型">
         <button class="filterButton" type="button" :aria-pressed="selectedType === 'all'" @click="selectedType = 'all'">
           全部
           <span v-if="activeTab === 'installed' && installedCounts.all !== undefined" class="filterCount">{{ installedCounts.all }}</span>
@@ -46,13 +48,14 @@
           <button class="filterButton" type="button" :aria-pressed="selectedType === 'my'" @click="selectedType = 'my'">我的</button>
         </div>
       </div>
-      <form v-if="activeTab !== 'ffmpeg'" class="marketSearch" role="search" @submit.prevent="applySearch">
+      <form v-if="isMarketTab || activeTab === 'installed'" class="marketSearch" role="search" @submit.prevent="applySearch">
         <el-input v-model="searchQuery" size="small" placeholder="搜索插件" aria-label="搜索插件" clearable @clear="applySearch" />
         <el-button size="small" type="primary" nativeType="submit">搜索</el-button>
       </form>
     </div>
 
     <ffmpeg v-if="activeTab === 'ffmpeg'" :visible />
+    <mcpServers v-else-if="activeTab === 'mcp'" :visible />
     <template v-else>
       <template v-if="activeTab === 'installed'">
         <el-alert v-for="message in visibleLoadErrors" :key="message" class="loadError" :title="message" type="error" :closable="false" showIcon />
@@ -114,7 +117,10 @@
               </h3>
               <span class="pluginId" :title="plugin.name">{{ plugin.name }}</span>
             </div>
-            <el-tag :type="pluginTypes[plugin.type].tagType" size="small">{{ pluginTypes[plugin.type].label }}</el-tag>
+            <div class="pluginTags">
+              <el-tag v-if="plugin.builtin || installedByKey.get(`${plugin.type}:${plugin.name}`)?.builtin" type="info" size="small" effect="plain">内置</el-tag>
+              <el-tag :type="pluginTypes[plugin.type].tagType" size="small">{{ pluginTypes[plugin.type].label }}</el-tag>
+            </div>
           </div>
           <p v-if="plugin.description" class="pluginDescription">{{ plugin.description }}</p>
           <el-text v-if="plugin.loadError" type="danger" size="small">{{ plugin.loadError }}</el-text>
@@ -126,9 +132,9 @@
             <el-text v-if="installLabel(plugin) === '已安装'" type="info" size="small">已安装</el-text>
             <el-popconfirm
               v-else-if="pluginTypes[plugin.type].path"
-              :title="`${installLabel(plugin)}${pluginTypes[plugin.type].label}“${plugin.displayName}”（${plugin.fileName}）？`"
+              :title="`${translate(installLabel(plugin))}${pluginTypes[plugin.type].label}“${plugin.displayName}”（${plugin.fileName}）？`"
               width="280"
-              :confirmButtonText="installLabel(plugin)"
+              :confirmButtonText="translate(installLabel(plugin))"
               cancelButtonText="取消"
               @confirm="installMarketPlugin(plugin)">
               <template #reference>
@@ -137,8 +143,8 @@
                   type="primary"
                   :loading="pendingPlugins.has(plugin.key)"
                   :disabled="loading || pendingPlugins.has(plugin.key)"
-                  :aria-label="`${installLabel(plugin)} ${plugin.displayName}`">
-                  {{ installLabel(plugin) }}
+                  :aria-label="`${translate(installLabel(plugin))} ${plugin.displayName}`">
+                  {{ translate(installLabel(plugin)) }}
                 </el-button>
               </template>
             </el-popconfirm>
@@ -152,47 +158,15 @@
                 tabindex="0"
                 :aria-disabled="collectingPlugins.has(plugin.key)"
                 :aria-pressed="plugin.isCollected === true"
-                :aria-label="`${plugin.isCollected ? '取消收藏' : '收藏'} ${plugin.displayName}`"
-                :title="plugin.isCollected ? '取消收藏' : '收藏'"
+                :aria-label="`${plugin.isCollected ? '取消收藏' : '添加收藏'} ${plugin.displayName}`"
+                :title="plugin.isCollected ? '取消收藏' : '添加收藏'"
                 @click="toggleCollection(plugin)"
                 @keydown.enter.prevent="toggleCollection(plugin)"
                 @keydown.space.prevent="toggleCollection(plugin)" />
             </div>
           </div>
-          <div v-else-if="plugin.type === 'skill'" class="pluginFooter" @click.stop>
-            <div class="pluginActions">
-              <el-button
-                size="small"
-                :icon="IconShare"
-                :loading="exportingPlugins.has(plugin.key)"
-                :disabled="loading || pendingPlugins.has(plugin.key)"
-                :aria-label="`导出分享 ${plugin.displayName}`"
-                title="导出分享"
-                @click="exportPlugin(plugin)" />
-              <el-popconfirm
-                v-if="plugin.author !== 'Toonflow'"
-                :title="`确定卸载“${plugin.displayName}”及其附属文件吗？`"
-                width="280"
-                confirmButtonText="卸载"
-                cancelButtonText="取消"
-                confirmButtonType="danger"
-                hideIcon
-                @confirm="updatePlugin(plugin, 'uninstall')">
-                <template #reference>
-                  <el-button
-                    size="small"
-                    :loading="pendingPlugins.has(plugin.key)"
-                    :disabled="!canEditPlugin(plugin) || loading || pendingPlugins.has(plugin.key) || exportingPlugins.has(plugin.key)"
-                    :aria-label="`卸载 ${plugin.displayName}`">
-                    卸载
-                  </el-button>
-                </template>
-              </el-popconfirm>
-            </div>
-          </div>
-
-          <div v-else class="pluginFooter" :class="{ pluginControls: plugin.author !== 'Toonflow' || plugin.type === 'agent' }" @click.stop>
-            <label v-if="plugin.author !== 'Toonflow' || plugin.type === 'agent'" class="pluginToggle">
+          <div v-else class="pluginFooter pluginControls" @click.stop>
+            <label class="pluginToggle">
               <span>{{ plugin.enabled === false ? "已禁用" : "已启用" }}</span>
               <el-switch
                 :modelValue="plugin.enabled !== false"
@@ -202,20 +176,19 @@
                 :aria-label="`启用 ${plugin.displayName}`"
                 @change="updatePlugin(plugin, 'setEnabled', $event === true)" />
             </label>
-            <el-text v-else type="info" size="small">已安装</el-text>
             <div class="pluginActions">
               <el-button
-                v-if="plugin.type === 'node' || plugin.type === 'tool' || (plugin.type === 'agent' && plugin.kind === 'local')"
+                v-if="plugin.type === 'node' || plugin.type === 'skill' || plugin.type === 'tool' || plugin.type === 'ext' || (plugin.type === 'agent' && plugin.kind === 'local')"
                 size="small"
                 :icon="IconShare"
                 :loading="exportingPlugins.has(plugin.key)"
-                :disabled="loading || pendingPlugins.has(plugin.key) || (plugin.type === 'tool' && !canManageTools) || (plugin.type === 'agent' && !canManageAgents)"
+                :disabled="loading || pendingPlugins.has(plugin.key) || (plugin.type === 'tool' && !canManageTools) || (plugin.type === 'agent' && !canManageAgents) || (plugin.type === 'ext' && !plugin.canManage)"
                 :aria-label="`导出分享 ${plugin.displayName}`"
                 title="导出分享"
                 @click="exportPlugin(plugin)" />
               <el-button v-if="plugin.type === 'agent' && plugin.kind === 'local'" size="small" :disabled="!canManageAgents || loading || pendingPlugins.has(plugin.key)" @click="selectedAgent = plugin">编辑</el-button>
               <el-button v-if="plugin.type === 'agent' && plugin.cardUrl" size="small" :icon="IconCopy" @click="copyCard(plugin.cardUrl)">Card</el-button>
-              <el-badge v-if="(plugin.type === 'tool' || plugin.type === 'node') && plugin.configRules?.length" isDot :hidden="!hasMissingConfig(plugin)">
+              <el-badge v-if="(plugin.type === 'tool' || plugin.type === 'node' || plugin.type === 'ext') && plugin.configRules?.length" isDot :hidden="!hasMissingConfig(plugin)">
                 <el-button
                   size="small"
                   :disabled="!canConfigurePlugin(plugin) || loading || pendingPlugins.has(plugin.key)"
@@ -228,9 +201,9 @@
                 </el-button>
               </el-badge>
               <el-popconfirm
-                v-if="plugin.author !== 'Toonflow' || plugin.type === 'agent'"
-                :title="`确定卸载“${plugin.displayName}”吗？`"
-                width="240"
+                v-if="plugin.author !== 'Toonflow' || plugin.type === 'skill' || plugin.type === 'agent' || plugin.type === 'ext'"
+                :title="`确定卸载“${plugin.displayName}”${plugin.type === 'skill' ? '及其附属文件' : ''}吗？`"
+                width="280"
                 confirmButtonText="卸载"
                 cancelButtonText="取消"
                 confirmButtonType="danger"
@@ -265,6 +238,7 @@
         layout="total, prev, pager, next"
         size="small" />
       <pluginConfigDialog v-if="selectedConfigPlugin" v-model="configVisible" :plugin="selectedConfigPlugin" :canManage="canConfigurePlugin(selectedConfigPlugin)" />
+      <extensionAssociationsDialog v-model="associationsVisible" />
       <agentEditorDialog v-if="selectedAgent" :key="selectedAgent.key" :agent="selectedAgent" :canManage="canManageAgents" @saved="refreshInstalled" @closed="selectedAgent = undefined" />
       <agentConnectDialog v-if="agentConnectVisible" @saved="refreshInstalled" @closed="agentConnectVisible = false" />
       <a2aSettingsDialog v-if="a2aSettingsVisible" @saved="refreshInstalled" @closed="a2aSettingsVisible = false" />
@@ -291,10 +265,11 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from "@toonflow/i18n/vue";
 import axios from "axios";
 import parse from "semver/functions/parse";
 import { computed, defineAsyncComponent, markRaw, onMounted, onBeforeUnmount, ref, watch } from "vue";
-import { IconBox, IconBook, IconTool, IconExternalLink, IconSparkles2, IconUpload, IconShare, IconStar, IconStarFilled, IconLink, IconSettings, IconCopy } from "@tabler/icons-vue";
+import { IconBox, IconBook, IconTool, IconFileText, IconExternalLink, IconSparkles2, IconUpload, IconShare, IconStar, IconStarFilled, IconLink, IconSettings, IconCopy } from "@tabler/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import tf, { getTfApiKey, isTfRouterProvider } from "@/lib/tf";
 import { saveSettings } from "@/stores/settings";
@@ -303,8 +278,10 @@ import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
 import saveFile from "@/lib/saveFile";
 import { writeClipboardText } from "@/lib/clipboard";
 import pluginConfigDialog from "./pluginConfigDialog.vue";
+import extensionAssociationsDialog from "./extensionAssociationsDialog.vue";
 import skillEditorDialog from "./skillEditorDialog.vue";
 import ffmpeg from "./ffmpeg.vue";
+import mcpServers from "./mcpServers.vue";
 import agentEditorDialog from "./agentEditorDialog.vue";
 import agentConnectDialog from "./agentConnectDialog.vue";
 import a2aSettingsDialog from "./a2aSettingsDialog.vue";
@@ -312,15 +289,17 @@ import type { Plugin, PluginType } from "./types";
 import { installPluginFile } from "../../installPluginFile";
 
 const { visible = true } = defineProps<{ visible?: boolean }>();
+const associationsVisible = ref(false);
 // ACT: Agent 插件市场仍在测试，暂时关闭入口。
 const agentMarketEnabled = false;
 const pluginTypes = {
   node: { label: "节点", path: "nodes", icon: IconBox, tagType: "primary" },
+  ext: { label: "文件扩展", path: "ext", icon: IconFileText, tagType: "info" },
   skill: { label: "技能", path: "skills", icon: IconBook, tagType: "success" },
   tool: { label: "工具", path: "tools", icon: IconTool, tagType: "warning" },
   agent: { label: "Agent", path: agentMarketEnabled ? "agents" : null, icon: IconSparkles2, tagType: "danger" },
 } as const;
-const tabs = { discover: "发现插件", installed: "已安装", ffmpeg: "FFmpeg" } as const;
+const tabs = { get discover() { return translate("发现插件"); }, get installed() { return translate("已安装"); }, mcp: "MCP", ffmpeg: "FFmpeg" } as const;
 const activeTab = ref<keyof typeof tabs>("discover");
 const isMarketTab = computed(() => activeTab.value === "discover");
 const marketPage = ref(1);
@@ -330,7 +309,7 @@ const selectedTypes = ref<{ discover: PluginType | "all" | "collection" | "my"; 
 const selectedType = computed({
   get: () => selectedTypes.value[activeTab.value === "installed" ? "installed" : "discover"],
   set: (type: PluginType | "all" | "collection" | "my") => {
-    if (activeTab.value === "ffmpeg") return;
+    if (activeTab.value !== "discover" && activeTab.value !== "installed") return;
     if (type === "collection" || type === "my") {
       activeTab.value = "discover";
       selectedTypes.value.discover = type;
@@ -432,7 +411,7 @@ function openPlugin(plugin: Plugin) {
 }
 
 function canConfigurePlugin(plugin: Plugin) {
-  return plugin.type === "node" ? plugin.canConfigure === true : plugin.type === "tool" && canManageTools.value;
+  return plugin.type === "node" || plugin.type === "ext" ? plugin.canConfigure === true : plugin.type === "tool" && canManageTools.value;
 }
 
 function hasMissingConfig(plugin: Plugin) {
@@ -532,7 +511,7 @@ watch(
 watch(
   () => [visible, activeTab.value, refreshKey.value],
   async (_value, _previous, onCleanup) => {
-    if (!visible || activeTab.value === "ffmpeg") return;
+    if (!visible || (activeTab.value !== "discover" && activeTab.value !== "installed")) return;
     const controller = new AbortController();
     onCleanup(() => controller.abort());
     loading.value = true;
@@ -545,7 +524,7 @@ watch(
         const category = pluginTypes[type];
         if (!category.path) return [];
         try {
-          const { data } = await axios.get(`/api/${category.path}/get`, {
+          const { data } = await axios.get(`/api/${category.path}/${type === "ext" ? "list" : "get"}`, {
             signal: controller.signal,
             headers: { ...requestHeaders, "Cache-Control": "no-cache" },
           });
@@ -601,7 +580,7 @@ async function saveMarketKey() {
       if (index < 0 && providers.some((item) => typeof item?.id === "string" && item.id.toLowerCase() === tfRouter.id.toLowerCase())) {
         throw new Error("存在同名的非官方 TF-router 供应商，请先在文本模型中修改其 ID");
       }
-      const { id, label, version, apiUrl, protocol, models } = tfRouter;
+      const { id, label, icon, version, apiUrl, protocol, models } = tfRouter;
       const configs = current.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
       if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
       const mediaConfig = configs?.tfRouter;
@@ -610,7 +589,7 @@ async function saveMarketKey() {
       return {
         customProviders:
           index < 0
-            ? [...providers, { id, label, version, apiUrl, protocol, models, apiKey: key }]
+            ? [...providers, { id, label, icon, version, apiUrl, protocol, models, apiKey: key }]
             : providers.map((item, position) => (position === index ? { ...item, apiKey: key } : item)),
         mediaProviderConfigs: { ...configs, tfRouter: { ...mediaConfig, apiKey: key } },
       };
@@ -648,8 +627,7 @@ async function copyCard(url: string) {
 function canEditPlugin(plugin: Plugin) {
   return (
     activeTab.value === "installed" &&
-    (plugin.author !== "Toonflow" || plugin.type === "agent") &&
-    (plugin.type === "node" || plugin.type === "skill" || (plugin.type === "tool" && canManageTools.value) || (plugin.type === "agent" && canManageAgents.value))
+    (plugin.type === "node" || plugin.type === "skill" || (plugin.type === "ext" && plugin.canManage === true) || (plugin.type === "tool" && canManageTools.value) || (plugin.type === "agent" && canManageAgents.value))
   );
 }
 
@@ -693,7 +671,8 @@ async function installMarketPlugin(plugin: Plugin) {
     const { data } = await axios.post(`/api/${path}/install`, { url: plugin.url, fileName: plugin.fileName }, { headers: requestHeaders });
     if (data.code !== 200) throw new Error(data.message || "安装插件失败");
     window.dispatchEvent(new CustomEvent("toonflow:plugin-installed", { detail: { type: plugin.type, name: data.data.name } }));
-    ElMessage.success(`${plugin.displayName}已${action}`);
+    if (plugin.type === "ext") window.dispatchEvent(new CustomEvent("toonflow:ext-updated", { detail: { name: data.data.name } }));
+    ElMessage.success(action === "更新" ? `${plugin.displayName}已更新` : `${plugin.displayName}已安装`);
   } catch (error) {
     ElMessage.error(errorMessage(error, "安装插件失败，请重试"));
   } finally {
@@ -710,6 +689,8 @@ async function installFile(event: Event) {
   try {
     const type = /\.agent\.zip$/i.test(file.name)
       ? "agent"
+      : /^ext-[a-z][a-zA-Z0-9]*\.umd\.js$/.test(file.name)
+      ? "ext"
       : /\.umd\.js$/i.test(file.name)
       ? "node"
       : /\.tool\.js$/i.test(file.name)
@@ -717,7 +698,7 @@ async function installFile(event: Event) {
       : /\.(zip|md|tar|tar\.gz|tgz)$/i.test(file.name)
       ? "skill"
       : undefined;
-    if (!type) throw new Error("请选择 Agent .agent.zip、节点 .umd.js、工具 .tool.js 或技能 .zip、.md、.tar、.tar.gz、.tgz 文件");
+    if (!type) throw new Error("请选择文件扩展 ext-*.umd.js、Agent .agent.zip、节点 .umd.js、工具 .tool.js 或技能 .zip、.md、.tar、.tar.gz、.tgz 文件");
     if (type === "agent" && !agentMarketEnabled) throw new Error("Agent 功能处于测试阶段，暂未开放安装");
     await installPluginFile(type, file);
     ElMessage.success(`${pluginTypes[type].label}已安装`);
@@ -735,12 +716,13 @@ async function exportPlugin(plugin: Plugin) {
     exportingPlugins.value.has(plugin.key) ||
     pendingPlugins.value.has(plugin.key) ||
     loading.value ||
-    (plugin.type === "tool" && !canManageTools.value)
+    (plugin.type === "tool" && !canManageTools.value) ||
+    (plugin.type === "ext" && !plugin.canManage)
   )
     return;
   exportingPlugins.value.add(plugin.key);
   try {
-    const fileName = `${plugin.name}.${plugin.type === "node" ? "umd.js" : plugin.type === "tool" ? "tool.js" : plugin.type === "agent" ? "agent.zip" : "zip"}`;
+    const fileName = `${plugin.name}.${plugin.type === "node" || plugin.type === "ext" ? "umd.js" : plugin.type === "tool" ? "tool.js" : plugin.type === "agent" ? "agent.zip" : "zip"}`;
     await saveFile(
       () =>
         axios
@@ -769,11 +751,11 @@ async function updatePlugin(plugin: Plugin, action: "setEnabled" | "uninstall", 
     loading.value ||
     pendingPlugins.value.has(plugin.key) ||
     exportingPlugins.value.has(plugin.key) ||
-    (plugin.type === "skill" && action !== "uninstall")
+    (action === "uninstall" && plugin.author === "Toonflow" && (plugin.type === "node" || plugin.type === "tool"))
   )
     return;
   pendingPlugins.value.add(plugin.key);
-  const actionLabel = action === "uninstall" ? "卸载插件" : "更新插件状态";
+  const actionLabel = action === "uninstall" ? translate("卸载插件") : translate("更新插件状态");
   try {
     const url = `/api/${pluginTypes[plugin.type].path}/${action}`;
     const { data } =
@@ -797,6 +779,7 @@ async function updatePlugin(plugin: Plugin, action: "setEnabled" | "uninstall", 
     } else plugin.enabled = enabled;
     if (plugin.type === "node")
       window.dispatchEvent(new CustomEvent("toonflow:plugin-installed", { detail: { type: plugin.type, name: plugin.name } }));
+    if (plugin.type === "ext") window.dispatchEvent(new CustomEvent("toonflow:ext-updated", { detail: { name: plugin.name } }));
   } catch (error) {
     ElMessage.error(errorMessage(error, `${actionLabel}失败，请重试`));
   } finally {
@@ -984,8 +967,13 @@ async function updatePlugin(plugin: Plugin, action: "setEnabled" | "uninstall", 
         justify-content: space-between;
         gap: 12px;
 
-        > .el-tag {
+        .pluginTags {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 4px;
           flex-shrink: 0;
+          max-width: 50%;
         }
 
         .pluginHeading {
@@ -1058,6 +1046,10 @@ async function updatePlugin(plugin: Plugin, action: "setEnabled" | "uninstall", 
         }
       }
       .pluginDescription {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        overflow: hidden;
         margin: 10px 0 0;
         font-size: 13px;
         line-height: 1.6;

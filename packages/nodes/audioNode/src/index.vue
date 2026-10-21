@@ -2,35 +2,35 @@
   <nodeSkeleton
     v-bind="nodeProps"
     :topVisible="node.selected"
+    :bottomVisible="node.selected && actions?.mode === 'speed'"
+    :bottomWidth="440"
     topWidth="max-content"
     :downloadUrl="previewUrl"
     :downloadName="outputFile?.url.split(/[\\/]/).at(-1)"
-    style="width: 320px"
-    @fullscreen="enterFullscreen">
+    :fullscreenVisible="false"
+    style="width: 360px">
     <template #topActions>
+      <el-button :icon="IconTextRecognition" :loading="transcribing" :disabled="!outputFile || uploading || actions?.processing" text title="音频转文本" aria-label="音频转文本" @click.stop="transcribe">转文本</el-button>
+      <el-button v-if="transcribing" :icon="IconPlayerStop" text title="取消转文本" aria-label="取消转文本" @click.stop="cancelTranscription">取消</el-button>
+      <el-button :icon="IconScissors" :disabled="!previewUrl || uploading || transcribing || actions?.processing" text title="截取音频" aria-label="截取音频" @click.stop="actions?.open('clip')">截取</el-button>
+      <el-button :icon="IconGauge" :disabled="!previewUrl || uploading || transcribing || actions?.processing" text title="音频变速" aria-label="音频变速" @click.stop="actions?.open('speed')">变速</el-button>
       <el-button
         :icon="IconTransfer"
         :loading="uploading"
+        :disabled="transcribing || actions?.processing"
         text
         title="替换音频"
         aria-label="替换音频"
-        @click.stop="fileInput?.click()" />
+        @click.stop="fileInput?.click()">替换音频</el-button>
     </template>
-    <div ref="audioContent" class="audioContent nopan">
-      <audio
+    <div class="audioContent nopan">
+      <audioPlayer
         v-if="previewUrl"
-        class="audioPreview nodrag nowheel"
+        ref="player"
+        class="audioPreview"
         :src="previewUrl"
-        controls
-        preload="metadata"
-        draggable="false"
-        @pointerdown.stop
-        @mousedown.stop
-        @dblclick.stop
-        aria-label="节点音频"
-        @loadedmetadata="updateNodeInternals"
-        @error="ElMessage.error('无法预览该音频')" />
-      <input ref="fileInput" class="fileInput" type="file" accept="audio/*" aria-label="选择音频" :disabled="uploading" @change="uploadAudio" />
+        @loadedmetadata="updateNodeInternals" />
+      <input ref="fileInput" class="fileInput" type="file" accept="audio/*" aria-label="选择音频" :disabled="uploading || transcribing || actions?.processing" @change="uploadAudio" />
       <el-button
         v-if="!outputs.audio"
         class="uploadButton"
@@ -43,14 +43,19 @@
         <icon-upload v-if="!uploading" :size="48" stroke="1.5" />
       </el-button>
     </div>
+    <template v-if="actions?.mode === 'speed'" #bottom><div ref="speedTarget" /></template>
   </nodeSkeleton>
+  <audioActions ref="actions" :file="outputFile" :src="previewUrl" :target="speedTarget" :disabled="uploading || transcribing" @pause="player?.pause()" />
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { IconMusic, IconUpload, IconTransfer } from "@tabler/icons-vue";
+import { IconMusic, IconUpload, IconTransfer, IconScissors, IconGauge, IconTextRecognition, IconPlayerStop } from "@tabler/icons-vue";
 import { ElButton, ElMessage } from "element-plus";
 import { nodeSkeleton, nodeTools, useNode, z, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
+import { useAudioTranscription } from "@toonflow/node-shared/useAudioTranscription";
+import audioPlayer from "./components/audioPlayer.vue";
+import audioActions from "./components/audioActions.vue";
 
 defineOptions({
   inheritAttrs: false,
@@ -62,28 +67,30 @@ const { node, nodeProps, outputs, nodeEvent, files, updateNodeInternals } = useN
 });
 const fileInput = ref<HTMLInputElement>();
 const uploading = ref(false);
-const audioContent = ref<HTMLDivElement>();
+const player = ref<InstanceType<typeof audioPlayer>>();
+const actions = ref<InstanceType<typeof audioActions>>();
+const speedTarget = ref<HTMLElement>();
 
 const outputFile = computed(() => outputs.value.audio?.dataType === "AUDIO" ? outputs.value.audio.value : undefined);
+const { processing: transcribing, transcribe, cancel: cancelTranscription, cancelAndWait: cancelTranscriptionAndWait } = useAudioTranscription(outputFile);
 const previewUrl = files.useFileUrl(
   outputFile,
   (error) => showError(error, "音频读取失败")
 );
 
-async function enterFullscreen() {
-  try { await audioContent.value?.requestFullscreen(); }
-  catch (error) { showError(error, "无法进入音频全屏"); }
-}
-
-nodeEvent.on("save", () => {
+nodeEvent.on("save", reason => {
   if (uploading.value) throw new Error("音频处理中，请完成后再切换或刷新节点");
+  if (reason === "reload" && (actions.value?.processing || transcribing.value)) throw new Error("音频处理中，请完成或取消后再刷新节点");
 });
-nodeEvent.on("delete", () => {
+nodeEvent.on("delete", async () => {
   if (uploading.value) throw new Error("音频上传中，请稍后删除节点");
   uploading.value = true;
-  return files.removeNodeFiles().finally(() => {
+  try {
+    await Promise.all([actions.value?.cancelAndWait(), cancelTranscriptionAndWait()]);
+    await files.removeNodeFiles();
+  } finally {
     uploading.value = false;
-  });
+  }
 });
 
 nodeTools.register({
@@ -95,7 +102,7 @@ nodeTools.register({
   }),
   async execute({ path, mimeType }, { signal }) {
     signal?.throwIfAborted();
-    if (uploading.value) throw new Error("音频处理中，请稍后重试");
+    if (uploading.value || transcribing.value || actions.value?.processing) throw new Error("音频处理中，请稍后重试");
     uploading.value = true;
     try {
       const content = await files.getWorkspaceFiles().read(path);
@@ -113,7 +120,7 @@ async function uploadAudio(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = "";
-  if (!file || uploading.value) return;
+  if (!file || uploading.value || transcribing.value || actions.value?.processing) return;
   if (!file.type.startsWith("audio/")) return void ElMessage.error("请选择音频文件");
   if (!file.size || file.size > 100 * 1024 * 1024) return void ElMessage.error("音频不能为空且不能超过 100 MB");
   uploading.value = true;
@@ -140,17 +147,6 @@ function showError(error: unknown, fallback: string) {
   min-height: 144px;
   display: flex;
   align-items: center;
-
-  &:fullscreen {
-    justify-content: center;
-    padding: 48px;
-    background: var(--el-bg-color);
-
-    .audioPreview {
-      max-width: 720px;
-    }
-
-  }
 
   .audioPreview {
     display: block;

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile } from "@toonflow/file";
 import { Router } from "express";
 import { z } from "zod";
 import u from "@/utils";

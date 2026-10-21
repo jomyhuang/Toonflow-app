@@ -1,7 +1,8 @@
 import u from "@/utils";
-import { readdir } from "node:fs/promises";
+import { readdir } from "@toonflow/file";
 import { Router } from "express";
 import { success } from "@/lib/responseFormat";
+import { translateMessage } from "@/lib/i18n";
 
 const router = Router();
 
@@ -19,12 +20,13 @@ export default router.get("/", async (req, res) => {
       const name = file.name.slice(0, -7);
       const metadata = await u.nodePlugins.readNode(name).catch((err: NodeJS.ErrnoException) => {
         if (err.code === "ENOENT") return null;
-        return { name, displayName: name, version: "", author: "", readme: "", github: "", configRules: [], loadError: err instanceof Error ? err.message : "节点文件无法读取" };
+        return { name, displayName: name, version: "", author: "", readme: "", github: "", configRules: [], loadError: translateMessage(err instanceof Error ? err.message : "节点文件无法读取") };
       });
       if (metadata === null) return null;
       return {
         loadError: "",
         ...metadata,
+        builtin: req.app.locals.builtinPlugins.node.has(name),
         url: `/api/nodes/files?name=${name}`,
         enabled: !files.some((entry) => entry.name === `${name}.disabled`),
         config: canConfigure ? u.nodePlugins.getNodeConfig(metadata) : {},

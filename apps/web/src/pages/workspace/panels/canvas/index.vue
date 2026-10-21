@@ -2,14 +2,17 @@
   <div
     ref="canvasElement"
     class="canvas"
-    :class="{ edgesHidden: !showEdges, handMode, compositingEnabled: generalSettings.canvasCompositingEnabled }"
+    :class="{ edgesHidden: !showEdges, handMode, multiSelectionMode: flow.multiSelectionActive.value, compositingEnabled: generalSettings.canvasCompositingEnabled }"
     :style="{ '--canvasEdgeColor': generalSettings.canvasEdgeColorMode === 'custom' ? generalSettings.canvasEdgeColor : 'var(--el-color-primary)' }"
     @dblclick="openNodeMenu"
     @wheel.capture="zoomCanvas"
     @gesturestart.capture="zoomCanvas"
     @gesturechange.capture="zoomCanvas"
     @gestureend.capture="zoomCanvas"
-    @pointermove="pointerPosition = { x: $event.clientX, y: $event.clientY }"
+    @pointerdown.capture="updateCanvasSelection"
+    @click.capture="updateCanvasSelection"
+    @auxclick.capture="preventMiddleClick"
+    @pointermove="pointerPosition = { x: $event.clientX, y: $event.clientY }; if (!$event.buttons) updateCanvasSelection($event)"
     @pointerleave="pointerPosition = undefined"
     @dragover="dragFilesOver"
     @drop="dropFiles">
@@ -36,12 +39,12 @@
       :zoom-on-double-click="false"
       :zoomOnScroll="false"
       :zoomOnPinch="active && !settingsVisible"
-      :panOnScroll="active && !settingsVisible"
+      :panOnScroll="active && !settingsVisible && !defaultWheelZoom"
       :panOnScrollSpeed="1"
-      :panOnDrag="handMode ? true : [1]"
+      :panOnDrag="handMode || isMobile ? true : defaultDragPan ? [0, 1] : [1]"
       :panOnScrollMode="PanOnScrollMode.Free"
       :delete-key-code="null"
-      :selectionKeyCode="!handMode"
+      :selectionKeyCode="active && !settingsVisible && !handMode && !isMobile && selectionKeyPressed"
       :selectionMode="SelectionMode.Partial"
       :multi-selection-key-code="null"
       :zoomActivationKeyCode="zoomKeyPressed ? true : null"
@@ -60,6 +63,10 @@
           :loading="nodeLoads.has(type) || (nodeListLoading && !nodeTypes[type] && !nodeErrors[type])" />
       </template>
       <background :gap="16" pattern-color="var(--el-border-color)" />
+      <canvasEmpty
+        v-if="active && !settingsVisible && project?.directory && canvasReady && !flow.getNodes.value.length"
+        :availableNodes="availableNodes"
+        @create="createEmptyNode" />
       <canvasMenu ref="canvasMenuRef" v-model:canvasId="canvasId" :directory="project?.directory" :initialCanvasId="initialCanvasId" :activateCanvas="activateCanvas" :flushSave="flushCanvases ?? flushCanvasSave">
         <assetLibrary ref="assetLibraryRef" v-model="assetsVisible" :directory="project?.directory" />
       </canvasMenu>
@@ -73,7 +80,7 @@
         :batchHistory="canvasHistory.batch"
         @update:showEdges="edgeDisconnect = undefined" />
       <nodeMenu
-        :key="JSON.stringify([project?.directory, canvasId])"
+        :key="JSON.stringify(['nodeMenu', project?.directory, canvasId])"
         ref="nodeMenuRef"
         :remoteNodes="availableNodes"
         :pasteNode="pasteClipboardNode"
@@ -87,7 +94,7 @@
         @undo="changeHistory('undo')"
         @redo="changeHistory('redo')" />
       <selectionToolbar
-        :key="JSON.stringify([project?.directory, canvasId])"
+        :key="JSON.stringify(['selectionToolbar', project?.directory, canvasId])"
         ref="selectionToolbarRef"
         :batchHistory="canvasHistory.batch"
         :getSignal="() => canvasController.signal"
@@ -119,11 +126,13 @@ import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, onScopeDispose
 import axios from "axios";
 import { debounce } from "lodash-es";
 import { ElMessage } from "element-plus";
+import { isMobile, isDesktop } from "@/lib/platform";
 import { storeToRefs } from "pinia";
 import { IconUnlink } from "@tabler/icons-vue";
 import * as vueRuntime from "vue";
 import * as vueFlowRuntime from "@vue-flow/core";
 import * as elementPlusRuntime from "element-plus";
+import * as threeRuntime from "three";
 import { runAgentLoop } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import "element-plus/dist/index.css";
@@ -134,6 +143,7 @@ import {
   SelectionMode,
   useVueFlow,
   wheelDelta,
+  isMacOs,
   isNode,
   type Node,
   type Edge,
@@ -147,27 +157,29 @@ import { useCanvasTools } from "./useCanvasTools";
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
 import { loadNodeComponent } from "./loadNodeComponent";
 import { useCanvasHistory } from "./useCanvasHistory";
-import { copyNodeToClipboard, nodeClipboardCommand, readClipboardNode } from "./nodeClipboard";
-import { readClipboardText } from "@/lib/clipboard";
+import { copyNodeToClipboard, copyNodesToClipboard, nodeClipboardCommand, readClipboardNodes } from "./nodeClipboard";
+import { readClipboardFiles, readClipboardText, writeClipboardImage } from "@/lib/clipboard";
 import nodeMenu from "./components/nodeMenu.vue";
 import remoteNode from "./components/remoteNode.vue";
 import canvasMenu from "./components/canvasMenu.vue";
 import canvasControls from "./components/canvasControls.vue";
+import canvasEmpty from "./components/canvasEmpty.vue";
 import assetLibrary from "./components/assetLibrary.vue";
 import groupNode from "./components/groupNode.vue";
 import selectionToolbar from "./components/selectionToolbar.vue";
 import nodeSearch from "./components/nodeSearch.vue";
-import { finishGroupDrag } from "./selectionNodes";
+import { finishGroupDrag, getSelectionTree } from "./selectionNodes";
 import type { NodeOutput } from "@toonflow/nodes-scaffold/values";
 import type { NodeConnectionFeedback, NodeHandle } from "@toonflow/nodes-scaffold/connection";
 import { useNodeEvent } from "@toonflow/nodes-scaffold/nodeEvent";
+import type { NodeDocumentContext, NodeDocumentState } from "@toonflow/nodes-scaffold/nodeDocument";
 import { useNodeToolsContext } from "@toonflow/nodes-scaffold/nodeTools";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { generalSettings } from "@/stores/settings";
 import { getShortcutBindings, shortcutLabel, shortcutMatches, shortcutPressed } from "@/lib/canvasShortcuts";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import anonymousData from "@/lib/anonymousData";
-import { dropCanvasFiles, importCanvasFiles, isCanvasFileDrag } from "./canvasDrop";
+import { createClipboardMediaFile, dropCanvasFiles, getClipboardMediaFiles, importCanvasFiles, isCanvasFileDrag } from "./canvasDrop";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/minimap/dist/style.css";
@@ -206,17 +218,26 @@ let loadRequest = 0;
 const snapEnabled = ref(false);
 const zoomKeyPressed = ref(false);
 const panKeyPressed = ref(false);
-const selectedTool = ref<"move" | "hand">("move");
+const selectionKeyPressed = ref(false);
+const defaultWheelZoom = computed(() => getShortcutBindings(generalSettings.value.canvasShortcuts.zoom).includes("None"));
+const defaultDragPan = computed(() => getShortcutBindings(generalSettings.value.canvasShortcuts.pan).includes("None"));
+const selectedTool = defineModel<"move" | "hand">("selectedTool", { default: "move" });
 const handMode = computed(() => props.active && !props.settingsVisible && (selectedTool.value === "hand" || panKeyPressed.value));
 let pointerPosition: XYPosition | undefined;
 const pressedCodes = new Set<string>();
 let gestureScale: number | undefined;
-let nativePasteRequested = false;
+let copyingNodes = false;
 const showEdges = ref(true);
 const assetsVisible = ref(false);
 const assetLibraryRef = ref<InstanceType<typeof assetLibrary>>();
 const edgeDisconnect = ref<{ id: string; x: number; y: number }>();
 const flow = useVueFlow(props.runtimeKey);
+const nodeDocument: NodeDocumentContext = { targets: shallowReactive(new Map()), mounts: new Map(), states: shallowReactive(new Map()) };
+const canvasDirty = ref(false);
+const canvasSaveError = ref("");
+const documentObservers = new Set<() => void>();
+onScopeDispose(() => { for (const release of documentObservers) release(); });
+provide("nodeDocument", nodeDocument);
 onScopeDispose(anonymousData.observeCanvas(() => props.active && canvasId.value
   ? { nodes: flow.nodes.value, edgeCount: flow.edges.value.length }
   : undefined));
@@ -244,7 +265,12 @@ const { canUndo, canRedo } = canvasHistory;
 provide("batchCanvasHistory", canvasHistory.batch);
 const getNodeTools = useNodeToolsContext();
 const { addNodes, addEdges, removeEdges, findEdge, findNode, toObject, viewport, screenToFlowCoordinate } = flow;
-provide("copyNodeToClipboard", (node: Parameters<typeof copyNodeToClipboard>[0]) => copyNodeToClipboard(node, project.value?.directory ?? ""));
+provide("copyNodeToClipboard", async (node: Parameters<typeof copyNodeToClipboard>[0]) => {
+  const directory = project.value?.directory;
+  if (!directory) throw new Error("请先选择工作目录");
+  if (await copyImageNodeToClipboard(directory, node)) return;
+  await copyNodeToClipboard(node, directory);
+});
 provide("retainNodeFiles", true);
 provide("selectionConnection", shallowRef<NodeConnectionFeedback>());
 provide("saveNodeToAssets", (label: string, outputs: { label: string; output: NodeOutput }[]) => assetLibraryRef.value?.openSave(label, outputs));
@@ -261,20 +287,97 @@ const createCanvasContext = useCanvasTools({
   resolveCanvasContext: id => props.resolveCanvasContext?.(id),
 });
 function getCanvasContext() {
-  return canvasId.value ? createCanvasContext(canvasId.value, canvasController.signal, workspaceController.signal) : undefined;
+  return canvasId.value || canvasMenuRef.value?.initialized ? createCanvasContext(canvasId.value, canvasController.signal, workspaceController.signal) : undefined;
 }
 const canvasReady = computed(() => !!canvasId.value && !nodeListLoading.value && nodeLoads.size === 0);
 provide("canvas", getCanvasContext);
-defineExpose({ canvasId, canvasReady, getCanvasContext, readDocumentNode, saveDocumentNode, flushSave: flushCanvasSave, cancelSave: cancelCanvasSave,
+defineExpose({ canvasId, canvasReady, getCanvasContext, addNodeAtPointer, readDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, prepareCanvasDelete, flushSave: flushCanvasSave, cancelSave: cancelCanvasSave,
+  openNodeSearch: () => nodeSearchRef.value?.open(),
+  getCanvases: (signal?: AbortSignal) => {
+    if (!canvasMenuRef.value) throw new Error("画布菜单尚未就绪");
+    return canvasMenuRef.value.getCanvases(signal);
+  },
+  syncCanvasPath: (previous: string, target: string) => canvasMenuRef.value?.syncCanvasPath(previous, target),
   getMentionNodes: () => flow.nodes.value, findMentionNode: flow.findNode,
   getRetainedNodes: canvasHistory.getRetainedNodes,
+  get canvasListReady() { return canvasMenuRef.value?.initialized ?? false; },
   get saveBusy() { return savePaused; }, get loadError() { return canvasMenuRef.value?.loadError ?? ""; },
 });
+
+async function prepareCanvasDelete() {
+  const directory = project.value?.directory;
+  const fileName = canvasId.value;
+  const nodes = [...flow.getNodes.value];
+  const signal = AbortSignal.any([workspaceController.signal, canvasController.signal]);
+  function checkCanvas() {
+    signal.throwIfAborted();
+    if (!directory || directory !== project.value?.directory || !fileName || fileName !== canvasId.value) {
+      throw new Error("工作区或画布已切换，请重新删除");
+    }
+  }
+  checkCanvas();
+  await nextTick();
+  checkCanvas();
+  // 宿主已暂停画布保存；这里只执行节点生命周期，文件删除成功后由宿主取消保存并卸载。
+  for (const node of nodes) {
+    if (flow.findNode(node.id) !== node) throw new Error("画布节点已变化，请重新删除");
+    await useNodeEvent(node.id, flow).emit("delete");
+    checkCanvas();
+    if (flow.findNode(node.id) !== node) throw new Error("画布节点已变化，请重新删除");
+  }
+  if (flow.getNodes.value.length !== nodes.length || nodes.some(node => flow.findNode(node.id) !== node)) {
+    throw new Error("画布节点已变化，请重新删除");
+  }
+}
 
 type DocumentNodeData = { label?: string; handles?: NodeHandle[]; outputs?: Record<string, NodeOutput | undefined>; textPath?: string };
 
 function checkDocumentDirectory(directory: string) {
   if (!directory || directory !== project.value?.directory) throw new Error("工作目录已切换，请重新打开节点");
+}
+
+function observeDocumentNode(directory: string, canvasPath: string, nodeId: string, onState: (state: NodeDocumentState) => void) {
+  checkDocumentDirectory(directory);
+  if (canvasId.value !== canvasPath || !findNode(nodeId)) throw new Error("节点不存在，请刷新文件树");
+  const stop = watch((): NodeDocumentState => {
+    const node = findNode(nodeId);
+    const state = nodeDocument.states.get(nodeId);
+    return { dirty: !!node && (canvasDirty.value || !!state?.dirty),
+      error: state?.error || canvasSaveError.value || (node && nodeErrors.value[node.type]) || "", deleted: !node };
+  }, onState, { immediate: true, flush: "sync" });
+  const release = () => { stop(); documentObservers.delete(dispose); };
+  const dispose = () => { onState({ dirty: false, error: "", deleted: true }); release(); };
+  documentObservers.add(dispose);
+  return {
+    release,
+    async flushSave() {
+      checkDocumentDirectory(directory);
+      if (!findNode(nodeId)) throw new Error("节点已删除，请刷新文件树");
+      await flushCanvasSave();
+    },
+  };
+}
+
+async function mountDocumentNode(directory: string, canvasPath: string, nodeId: string, target: HTMLElement) {
+  checkDocumentDirectory(directory);
+  if (canvasId.value !== canvasPath) throw new Error("画布已切换，请重新打开节点");
+  await nextTick();
+  checkDocumentDirectory(directory);
+  const node = findNode(nodeId);
+  if (!node) throw new Error("节点已删除，请刷新文件树");
+  if (nodeErrors.value[node.type]) throw new Error(nodeErrors.value[node.type]);
+  const mount = nodeDocument.mounts.get(nodeId);
+  if (!mount) throw new Error("当前节点未提供文档视图，请确认节点正常加载并更新节点插件");
+  const release = mount(target);
+  try {
+    await nextTick();
+    checkDocumentDirectory(directory);
+    if (!target.isConnected || !target.querySelector(".documentNode")) throw new Error("节点文档视图加载失败，请重新打开节点");
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 function documentHandles(node: Node<DocumentNodeData>) {
@@ -321,7 +424,6 @@ async function readDocumentNode(directory: string, canvasPath: string, nodeId: s
   const { files, node, liveNode, textPath } = await readDocumentCanvas(directory, canvasPath, nodeId);
   const source = liveNode ?? node;
   const handles = documentHandles(source);
-  if (!handles.length) throw new Error("节点没有文本输出，请刷新文件树");
   const storedText = textPath === undefined ? undefined : await files.readText(textPath);
   checkDocumentDirectory(directory);
   return {
@@ -337,17 +439,30 @@ async function readDocumentNode(directory: string, canvasPath: string, nodeId: s
   };
 }
 
-async function saveDocumentNode(directory: string, canvasPath: string, nodeId: string, handleId: string, text: string) {
+async function saveDocumentNode(directory: string, canvasPath: string, nodeId: string, handleId: string, text: string, expectedText?: string) {
   checkDocumentDirectory(directory);
   await flushCanvasSave(async () => {
     const { files, canvas, node, liveNode, textPath } = await readDocumentCanvas(directory, canvasPath, nodeId);
     if (!documentHandles(liveNode ?? node).some((handle) => handle.id === handleId)) throw new Error("文本输出已删除，请重新打开节点");
+    if (expectedText !== undefined) {
+      const output = (liveNode ?? node).data?.outputs?.[handleId];
+      const currentText = output?.dataType === "STRING" && typeof output.value === "string" ? output.value : textPath === undefined ? "" : await files.readText(textPath);
+      if (currentText !== expectedText) throw new Error("文档内容已变化，请重新读取后编辑");
+    }
     if (liveNode?.type === "remote-textNode") {
       await getNodeTools().call({ nodeId, name: "node:setText", args: { text } }, canvasController.signal);
       checkDocumentDirectory(directory);
+      // 节点工具已同步输出并排队保存；等待期间用户可能继续编辑，不能再写入旧文本快照。
+      return;
     }
+    if (liveNode && canvasId.value === canvasPath && findNode(nodeId) === liveNode) {
+      const output = liveNode.data.outputs?.[handleId];
+      if (output?.dataType === "STRING") output.value = text;
+      else if (textPath === undefined) (liveNode.data.outputs ??= {})[handleId] = { dataType: "STRING", value: text };
+    }
+    canvasMenuRef.value?.syncDocumentNode(canvasPath, nodeId, handleId, text, textPath === undefined);
     if (textPath !== undefined) {
-      if (liveNode?.type !== "remote-textNode") await files.write(textPath, text);
+      await files.write(textPath, text);
     } else {
       const data = (node.data ??= {});
       const output = data.outputs?.[handleId];
@@ -356,12 +471,6 @@ async function saveDocumentNode(directory: string, canvasPath: string, nodeId: s
       await files.writeJson(canvasPath, canvas);
     }
     checkDocumentDirectory(directory);
-    if (liveNode && canvasId.value === canvasPath && findNode(nodeId) === liveNode) {
-      const output = liveNode.data.outputs?.[handleId];
-      if (output?.dataType === "STRING") output.value = text;
-      else if (textPath === undefined) (liveNode.data.outputs ??= {})[handleId] = { dataType: "STRING", value: text };
-    }
-    canvasMenuRef.value?.syncDocumentNode(canvasPath, nodeId, handleId, text, textPath === undefined);
   });
 }
 
@@ -412,7 +521,16 @@ function openNodeMenu(event: MouseEvent) {
   if (event.target instanceof Element && event.target.classList.contains("vue-flow__pane")) nodeMenuRef.value?.openMenu(event, true);
 }
 
+function createEmptyNode(type: string) {
+  if (!props.active || props.settingsVisible || !project.value?.directory || !canvasReady.value || flow.getNodes.value.length) return;
+  const rect = canvasElement.value?.getBoundingClientRect();
+  if (!rect) return;
+  const center = screenToFlowCoordinate({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  void nodeMenuRef.value?.addNode(type, { x: center.x - 200, y: center.y - 160 });
+}
+
 function addNodeAtPointer() {
+  if (!props.active || props.settingsVisible || !project.value?.directory || !canvasReady.value) return;
   const rect = canvasElement.value?.getBoundingClientRect();
   if (!rect) return;
   const position = pointerPosition ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -443,13 +561,17 @@ let changedWhilePaused = false;
 let saveRevision = 0;
 const saveCanvas = debounce((directory: string, fileName: string) => {
   const flow = toObject();
+  const revision = saveRevision;
   // ACT: 同页保存按顺序完成，防止慢请求覆盖后续修改；不处理多个客户端的并发编辑。
   saving = saving.then(async () => {
     try {
       await useWorkspaceFiles(directory).writeJson(fileName, { toonflowCanvas: true, nodes: flow.nodes, edges: flow.edges, viewport: flow.viewport });
       saveError = undefined;
+      canvasSaveError.value = "";
+      if (revision === saveRevision) canvasDirty.value = false;
     } catch (err) {
       saveError = err;
+      canvasSaveError.value = axios.isAxiosError<{ message?: string }>(err) ? err.response?.data.message || err.message : err instanceof Error ? err.message : "画布保存失败";
       ElMessage.error(
         axios.isAxiosError<{ message?: string }>(err)
           ? err.response?.data.message || "画布保存失败"
@@ -463,6 +585,7 @@ const saveCanvas = debounce((directory: string, fileName: string) => {
 
 function scheduleCanvasSave() {
   if (saveCancelled) return;
+  canvasDirty.value = true;
   saveRevision++;
   if (savePaused) {
     changedWhilePaused = true;
@@ -566,7 +689,10 @@ watch(() => props.active, (active) => {
 
 function flushCanvasSave(action?: () => Promise<void>): Promise<void> {
   // ACT: 完整保存及其文件操作串行执行，重命名暂停期间的显式保存也必须等待。
-  const next = flushing.then(() => saveCanvasState(action));
+  const next = flushing.then(() => saveCanvasState(action)).then(() => { canvasSaveError.value = ""; }, error => {
+    canvasSaveError.value = axios.isAxiosError<{ message?: string }>(error) ? error.response?.data.message || error.message : error instanceof Error ? error.message : "画布保存失败";
+    throw error;
+  });
   flushing = next.catch(() => {});
   return next;
 }
@@ -611,28 +737,122 @@ function cancelCanvasSave() {
   changedWhilePaused = false;
   saveCanvas.cancel();
 }
-async function pasteNode(event: ClipboardEvent) {
-  if (!nativePasteRequested) return;
-  nativePasteRequested = false;
+function canUseCanvasClipboard(event: Event) {
   const target = event.target;
-  if (!props.active || event.defaultPrevented || props.settingsVisible || !canvasId.value || !project.value?.directory) return;
-  if (
-    target instanceof Element &&
-    (target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='dialog'], #agentPanel") ||
-      (target !== document.body && target !== document.documentElement && !canvasElement.value?.contains(target)))
-  )
-    return;
-  const command = event.clipboardData?.getData("text/plain") ?? "";
-  if (!nodeClipboardCommand.test(command)) return;
+  return props.active && !event.defaultPrevented && !props.settingsVisible && !!canvasId.value && !!project.value?.directory
+    && target instanceof Element
+    && !target.closest("input, textarea, select, button, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='slider'], [role='dialog'], #agentPanel")
+    && (target === document.body || target === document.documentElement || canvasElement.value?.contains(target));
+}
+
+function beforeClipboard(event: Event) {
+  if (!canUseCanvasClipboard(event)) return;
+  if (event.type === "beforecopy" && (!flow.getSelectedNodes.value.length || window.getSelection()?.toString())) return;
+  // ACT: WKWebView 通过 beforecopy/beforepaste 判定非输入区能否使用原生编辑菜单。
   event.preventDefault();
-  await pasteNodeAtCenter(command);
+}
+
+function copyNode(event: ClipboardEvent) {
+  if (!canUseCanvasClipboard(event) || !flow.getSelectedNodes.value.length || window.getSelection()?.toString()) return;
+  event.preventDefault();
+  void copySelectedNodes();
+}
+
+function imageOutput(data: { outputs?: Record<string, NodeOutput | undefined> } | undefined) {
+  for (const output of Object.values(data?.outputs ?? {})) {
+    if (output?.dataType !== "IMAGE" || !output.value || typeof output.value !== "object") continue;
+    if (typeof output.value.url === "string" && output.value.url) return output.value;
+  }
+}
+
+async function copyImageNodeToClipboard(directory: string, node: Parameters<typeof copyNodeToClipboard>[0]) {
+  const output = imageOutput(node.data);
+  if (!output) return false;
+  const content = await useWorkspaceFiles(directory).read(output.url);
+  await writeClipboardImage(new Blob([content], { type: output.mimeType || "image/png" }));
+  return true;
+}
+
+async function copySelectedNodes() {
+  if (copyingNodes || !project.value?.directory) return;
+  const nodes = getSelectionTree(flow.getSelectedNodes.value, flow.getNodes.value);
+  if (!nodes.length) return;
+  const directory = project.value.directory;
+  const signal = canvasController.signal;
+  copyingNodes = true;
+  try {
+    if (nodes.length === 1 && await copyImageNodeToClipboard(directory, { data: nodes[0]!.data ?? {} })) {
+      ElMessage.success("已复制图片");
+      return;
+    }
+    const ids = new Set(nodes.map(node => node.id));
+    const snapshot = toObject();
+    const savedNodes = new Map(snapshot.nodes.map(node => [node.id, node]));
+    const copies = await Promise.all(nodes.map(async node => {
+      const patch = await useNodeEvent(node.id, flow).emit("copy");
+      const saved = savedNodes.get(node.id)!;
+      const parentNode = ids.has(saved.parentNode ?? "") ? saved.parentNode : undefined;
+      return { ...saved, data: { ...saved.data, ...patch }, parentNode,
+        ...(saved.parentNode && !parentNode ? { extent: undefined, expandParent: false } : {}),
+        position: parentNode ? { ...saved.position } : { x: node.computedPosition.x, y: node.computedPosition.y } };
+    }));
+    signal.throwIfAborted();
+    if (nodes.some(node => findNode(node.id) !== node)) throw new Error("节点已变化，请重新复制");
+    const edges = snapshot.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target));
+    await copyNodesToClipboard(copies, edges, directory);
+  } catch (error) {
+    if (!signal.aborted) ElMessage.error(error instanceof Error ? error.message : "节点复制失败");
+  } finally {
+    copyingNodes = false;
+  }
+}
+
+async function pasteNode(event: ClipboardEvent) {
+  if (!canUseCanvasClipboard(event)) return;
+  const text = event.clipboardData?.getData("text/plain") ?? "";
+  if (nodeClipboardCommand.test(text)) {
+    event.preventDefault();
+    await pasteNodeAtCenter(text);
+    return;
+  }
+  const canvasSignal = canvasController.signal;
+  let files = getClipboardMediaFiles(event);
+  if (files.length || text.trim()) event.preventDefault();
+  // ACT: 部分 WebView 不向 paste 事件暴露剪贴板文件，桌面端回退到原生剪贴板读取。
+  if (!files.length && isDesktop) files = await readClipboardFiles().catch(() => []);
+  if (canvasSignal.aborted) return;
+  if (!files.length && text.trim()) files = [new File([text], "粘贴文本.txt", { type: "text/plain" })];
+  if (!files.length) return;
+  event.preventDefault();
+  const position = pastePosition();
+  if (position) await importCanvasContent(files, position);
+}
+
+function pastePosition() {
+  const rect = canvasElement.value?.getBoundingClientRect();
+  if (!rect) return;
+  const point = pointerPosition && pointerPosition.x >= rect.left && pointerPosition.x <= rect.right && pointerPosition.y >= rect.top && pointerPosition.y <= rect.bottom
+    ? pointerPosition
+    : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  return screenToFlowCoordinate(point);
 }
 
 async function pasteNodeAtCenter(command?: string) {
-  const rect = canvasElement.value?.getBoundingClientRect();
-  if (!rect) return;
-  const position = screenToFlowCoordinate({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-  await pasteClipboardNode(position, command);
+  const position = pastePosition();
+  if (position) await pasteClipboardNode(position, command);
+}
+
+async function importCanvasContent(files: File[], position: { x: number; y: number }) {
+  const directory = project.value?.directory;
+  if (!directory) return false;
+  const canvasSignal = canvasController.signal;
+  try {
+    await canvasHistory.batch(() => importCanvasFiles(files, position, { directory, availableNodes: availableNodes.value, signal: canvasSignal, flow }));
+    return true;
+  } catch (error) {
+    if (!canvasSignal.aborted) ElMessage.error(error instanceof Error ? error.message : "剪贴板内容导入失败");
+    return false;
+  }
 }
 
 async function pasteClipboardNode(position: { x: number; y: number }, command?: string) {
@@ -640,12 +860,35 @@ async function pasteClipboardNode(position: { x: number; y: number }, command?: 
   const canvasSignal = canvasController.signal;
   try {
     const directory = project.value.directory;
-    const node = await readClipboardNode(command ?? (await readClipboardText()), directory);
+    const text = command ?? (await readClipboardText());
+    const snapshot = await readClipboardNodes(text, directory);
     if (canvasSignal.aborted) return false;
-    if (!node) throw new Error("剪贴板中没有可粘贴的节点命令");
-    if (!availableNodes.value.some((item) => item.type === node.type)) throw new Error("请先安装并启用对应的节点插件");
-    addNodes({ id: crypto.randomUUID(), type: node.type, data: node.data, position });
-    return true;
+    if (snapshot) {
+      if (snapshot.nodes.some(node => node.type !== "canvasGroup" && !availableNodes.value.some(item => item.type === node.type))) {
+        throw new Error("请先安装并启用对应的节点插件");
+      }
+      const ids = new Map(snapshot.nodes.map(node => [node.id, crypto.randomUUID()]));
+      const roots = snapshot.nodes.filter(node => !node.parentNode);
+      const left = Math.min(...roots.map(node => node.position.x));
+      const top = Math.min(...roots.map(node => node.position.y));
+      await canvasHistory.batch(async () => {
+        flow.removeSelectedElements();
+        addNodes(snapshot.nodes.map(node => ({ ...node, id: ids.get(node.id)!, parentNode: ids.get(node.parentNode ?? ""), selected: true,
+          position: node.parentNode ? node.position : { x: position.x + node.position.x - left, y: position.y + node.position.y - top } })));
+        await nextTick();
+        if (canvasSignal.aborted) return;
+        addEdges(snapshot.edges.map(edge => ({ ...edge, id: crypto.randomUUID(), source: ids.get(edge.source)!, target: ids.get(edge.target)! })));
+      });
+      return true;
+    }
+    const files = await readClipboardFiles().catch((error): File[] => {
+      if (text.trim()) return [];
+      throw error;
+    });
+    if (canvasSignal.aborted) return false;
+    if (!files.length && text.trim()) files.push(new File([text], "粘贴文本.txt", { type: "text/plain" }));
+    if (!files.length) throw new Error("剪贴板中没有可粘贴的节点、文本、图片、视频或音频");
+    return await importCanvasContent(files, position);
   } catch (error) {
     const pasteShortcut = generalSettings.value.canvasShortcuts.paste;
     const clipboardMessage = getShortcutBindings(pasteShortcut).some(binding => /^(Ctrl|Meta)\+KeyV$/.test(binding))
@@ -653,12 +896,11 @@ async function pasteClipboardNode(position: { x: number; y: number }, command?: 
       : "无法读取剪贴板，请允许浏览器访问剪贴板";
     if (!canvasSignal.aborted)
       ElMessage.error(
-        error instanceof DOMException && error.name === "NotAllowedError" ? clipboardMessage : error instanceof Error ? error.message : "节点粘贴失败"
+        error instanceof DOMException && error.name === "NotAllowedError" ? clipboardMessage : error instanceof Error ? error.message : "剪贴板内容粘贴失败"
       );
     return false;
   }
 }
-
 function zoomCanvas(event: WheelEvent | (Event & { scale: number })) {
   if (event.type === "gestureend") gestureScale = undefined;
   if (!props.active || props.settingsVisible || document.fullscreenElement || flow.userSelectionActive.value) return;
@@ -672,12 +914,21 @@ function zoomCanvas(event: WheelEvent | (Event & { scale: number })) {
   } else {
     // ACT: Chromium 捏合发送 Ctrl+wheel，但不发送 Control 按键；WebKit 使用上方原生 gesture 事件。
     const pinching = event.ctrlKey && !pressedCodes.has("ControlLeft") && !pressedCodes.has("ControlRight");
+    // 无需按键的滚轮缩放让节点控件保留自己的滚动；显式缩放快捷键及捏合仍沿用原行为。
+    if (defaultWheelZoom.value && !pinching && !zoomKeyPressed.value
+      && event.target.closest(".nowheel, input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='slider']")) return;
     if (!pinching && !shortcutPressed(event, generalSettings.value.canvasShortcuts.zoom, pressedCodes)) {
       if (!event.ctrlKey) return;
       // 实体 Ctrl 未绑定缩放时，阻止 Vue Flow 和节点骨架将它误判为捏合。
       factor = 1;
+    } else if (pinching && gestureScale !== undefined) {
+      factor = 1;
+    } else if (pinching) {
+      factor = 2 ** (-event.deltaY * 0.02);
     } else {
-      factor = pinching && gestureScale !== undefined ? 1 : 2 ** (pinching ? -event.deltaY * 0.02 : wheelDelta(event));
+      // ACT: @vue-flow/core 的 wheelDelta 在 macOS 下若检测到 event.ctrlKey 会额外乘以 10（误判为捏合微步）；非捏合的实体 Ctrl 滚轮缩放需剔除该倍数，保留标准滚轮速度。
+      const delta = wheelDelta(event) / (event.ctrlKey && isMacOs() ? 10 : 1);
+      factor = 2 ** delta;
     }
     point = { x: event.clientX, y: event.clientY };
   }
@@ -693,10 +944,20 @@ function zoomCanvas(event: WheelEvent | (Event & { scale: number })) {
   selection.call<[number, [number, number], Event]>(zoom.scaleBy, factor, [point.x - bounds.left, point.y - bounds.top], event);
 }
 
+function preventMiddleClick(event: MouseEvent) {
+  if (event.button === 1) event.preventDefault();
+}
+
+function updateCanvasSelection(event: MouseEvent | KeyboardEvent) {
+  // 失焦期间可能漏掉修饰键；不能在按下到抬起之间改变已命中的选区，避免 click 落到画布清空选择。
+  if (event.type === "pointerdown" && event.target instanceof Element && event.target.closest(".vue-flow__nodesselection-rect")) return;
+  flow.multiSelectionActive.value = props.active && !props.settingsVisible && !handMode.value
+    && shortcutPressed(event, generalSettings.value.canvasShortcuts.multiSelection, pressedCodes);
+}
+
 function updateCanvasKeys(event: KeyboardEvent) {
   if (event.type === "keydown") {
     pressedCodes.add(event.code);
-    nativePasteRequested = false;
   } else pressedCodes.delete(event.code);
   if (!props.active || props.settingsVisible) return resetCanvasKeys();
   const target = event.target;
@@ -705,27 +966,33 @@ function updateCanvasKeys(event: KeyboardEvent) {
     target instanceof Element &&
     !target.closest("[role='dialog'], #agentPanel") &&
     (target === document.body || target === document.documentElement || canvasElement.value?.contains(target));
-  zoomKeyPressed.value = !event.isComposing && shortcutPressed(event, shortcuts.zoom, pressedCodes);
+  // None 只配置默认鼠标手势，不能触发会禁用节点交互的临时抓手或节点内部缩放。
+  zoomKeyPressed.value = !event.isComposing && shortcutPressed(event, getShortcutBindings(shortcuts.zoom).filter(binding => binding !== "None").join(" / "), pressedCodes);
+  selectionKeyPressed.value = !event.isComposing && shortcutPressed(event, shortcuts.selection, pressedCodes);
+  if (!selectionKeyPressed.value && !flow.userSelectionActive.value) flow.userSelectionRect.value = null;
   const editing =
     !(target instanceof Element) ||
     !!target.closest("input, textarea, select, button, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='slider']");
-  panKeyPressed.value = !!inCanvas && !editing && !event.isComposing && shortcutPressed(event, shortcuts.pan, pressedCodes);
+  panKeyPressed.value = !!inCanvas && !editing && !event.isComposing
+    && shortcutPressed(event, getShortcutBindings(shortcuts.pan).filter(binding => binding !== "None").join(" / "), pressedCodes);
+  updateCanvasSelection(event);
   if (event.type === "keyup" || event.defaultPrevented || event.isComposing || !inCanvas || editing) return;
   const action = ([
     "group", "mergeGroup", "ungroup", "addNode", "moveTool", "handTool", "arrange", "search",
-    "delete", "paste", "undo", "redo", "zoomIn", "zoomOut", "fitView",
+    "delete", "copy", "paste", "undo", "redo", "zoomIn", "zoomOut", "fitView",
   ] as const).find((action) =>
     shortcutMatches(event, shortcuts[action])
   );
   if (!action) {
-    if (panKeyPressed.value) event.preventDefault();
+    const nativeClipboardKey = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+      && (event.code === "KeyV" || event.code === "KeyC" && flow.getSelectedNodes.value.length && !window.getSelection()?.toString());
+    if (panKeyPressed.value || nativeClipboardKey) event.preventDefault();
     return;
   }
   if (!canvasId.value || !project.value?.directory) return;
-  if (action === "paste" && event.code === "KeyV" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
-    nativePasteRequested = true;
-    return;
-  }
+  if (action === "copy" && (!flow.getSelectedNodes.value.length || window.getSelection()?.toString())) return;
+  // 桌面快捷键直接复用原生剪贴板桥接；浏览器 Ctrl/Cmd+V 保留原生事件，避免额外读取权限。
+  if (!isDesktop && action === "paste" && event.code === "KeyV" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) return;
   event.preventDefault();
   if (event.repeat) return;
   if (action === "delete") {
@@ -739,7 +1006,8 @@ function updateCanvasKeys(event: KeyboardEvent) {
       });
     return;
   }
-  if (action === "paste") void pasteNodeAtCenter();
+  if (action === "copy") void copySelectedNodes();
+  else if (action === "paste") void pasteNodeAtCenter();
   else if (action === "undo" || action === "redo") void changeHistory(action);
   else if (action === "group" || action === "mergeGroup" || action === "ungroup") {
     void selectionToolbarRef.value?.operate(action);
@@ -753,12 +1021,14 @@ function updateCanvasKeys(event: KeyboardEvent) {
 function resetCanvasKeys() {
   pressedCodes.clear();
   gestureScale = undefined;
-  nativePasteRequested = false;
   zoomKeyPressed.value = false;
   panKeyPressed.value = false;
+  selectionKeyPressed.value = getShortcutBindings(generalSettings.value.canvasShortcuts.selection).includes("None");
+  flow.multiSelectionActive.value = false;
+  if (!flow.userSelectionActive.value) flow.userSelectionRect.value = null;
 }
 
-watch([() => props.settingsVisible, () => generalSettings.value.canvasShortcuts], resetCanvasKeys, { deep: true, flush: "sync" });
+watch([() => props.active, () => props.settingsVisible, () => generalSettings.value.canvasShortcuts], resetCanvasKeys, { deep: true, flush: "sync", immediate: true });
 
 function refreshInstalled(event: WindowEventMap["toonflow:plugin-installed"]) {
   if (event.detail.type === "node") void loadRemoteNodes(event.detail.name);
@@ -774,6 +1044,9 @@ onMounted(() => {
   window.addEventListener("toonflow:plugin-installed", refreshInstalled);
   window.addEventListener("toonflow:node-config-updated", refreshNodeConfig);
   document.addEventListener("paste", pasteNode);
+  document.addEventListener("copy", copyNode);
+  document.addEventListener("beforecopy", beforeClipboard);
+  document.addEventListener("beforepaste", beforeClipboard);
   void loadRemoteNodes();
 });
 onBeforeUnmount(() => {
@@ -783,6 +1056,9 @@ onBeforeUnmount(() => {
   window.removeEventListener("toonflow:plugin-installed", refreshInstalled);
   window.removeEventListener("toonflow:node-config-updated", refreshNodeConfig);
   document.removeEventListener("paste", pasteNode);
+  document.removeEventListener("copy", copyNode);
+  document.removeEventListener("beforecopy", beforeClipboard);
+  document.removeEventListener("beforepaste", beforeClipboard);
   workspaceController.abort(new Error("工作区已关闭"));
   canvasController.abort(new Error("画布已关闭"));
   saveCanvas.flush();
@@ -790,10 +1066,10 @@ onBeforeUnmount(() => {
 });
 
 const nodeWindow = window as typeof window & {
-  toonflowNodeHost?: { vue: typeof vueRuntime; vueFlow: typeof vueFlowRuntime; elementPlus: typeof elementPlusRuntime; ai: { runAgentLoop: typeof runAgentLoop; createAssistantMessageEventStream: typeof createAssistantMessageEventStream } };
+  toonflowNodeHost?: { vue: typeof vueRuntime; vueFlow: typeof vueFlowRuntime; elementPlus: typeof elementPlusRuntime; three: typeof threeRuntime; ai: { runAgentLoop: typeof runAgentLoop; createAssistantMessageEventStream: typeof createAssistantMessageEventStream } };
   toonflowNodes?: NodeTypesObject;
 };
-nodeWindow.toonflowNodeHost = { vue: vueRuntime, vueFlow: vueFlowRuntime, elementPlus: elementPlusRuntime, ai: { runAgentLoop, createAssistantMessageEventStream } };
+nodeWindow.toonflowNodeHost = { vue: vueRuntime, vueFlow: vueFlowRuntime, elementPlus: elementPlusRuntime, three: threeRuntime, ai: { runAgentLoop, createAssistantMessageEventStream } };
 provide("nodeConfig", (nodeType: string) => nodeConfigs.value[nodeType] ?? {});
 provide("workspaceFiles", () => {
   const directory = project.value?.directory;
@@ -901,11 +1177,11 @@ async function loadRemoteNodes(reloadName?: string) {
 }
 
 const defaultEdgeOptions = markRaw({
-  type: "simple-bezier",
+  type: "simplebezier",
   animated: false,
   class: ({ sourceNode, targetNode }: GraphEdge) => {
     if (!sourceNode.selected && !sourceNode.dragging && !targetNode.selected && !targetNode.dragging) return "";
-    return [generalSettings.value.canvasEdgeColorMode !== "none" && "edgeActive", generalSettings.value.canvasEdgeAnimationEnabled && "animated"].filter(Boolean).join(" ");
+    return ["edgeNodeActive", generalSettings.value.canvasEdgeColorMode !== "none" && "edgeActive", generalSettings.value.canvasEdgeAnimationEnabled && "animated"].filter(Boolean).join(" ");
   },
   focusable: false,
   selectable: false,
@@ -932,11 +1208,12 @@ const defaultEdgeOptions = markRaw({
     cursor: grab;
   }
 
-  &.edgesHidden :deep(.vue-flow__edges) {
+  &.edgesHidden :deep(.vue-flow__edges:not(:has(.edgeNodeActive))) {
     display: none;
   }
-  &.edgesHidden :deep(.vue-flow__handle) {
-    display: none !important;
+  &.edgesHidden :deep(.vue-flow__handle:not(.connectedNodeActive)) {
+    // Vue Flow 仍会测量隐藏端口，必须保留布局以免零尺寸污染连线坐标。
+    visibility: hidden !important;
   }
 
   :deep(.vue-flow__edge.edgeActive .vue-flow__edge-path) {
@@ -952,6 +1229,10 @@ const defaultEdgeOptions = markRaw({
     padding: 8px;
     margin: -8px;
     border-radius: 4px;
+  }
+
+  &.multiSelectionMode :deep(.vue-flow__nodesselection-rect) {
+    pointer-events: none;
   }
 }
 .edgeDisconnect {

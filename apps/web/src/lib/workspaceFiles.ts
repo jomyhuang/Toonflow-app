@@ -1,9 +1,13 @@
 import axios from "axios";
+import { isMobile, isRemoteConnection } from "./platform";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { registerApiLanguage } from "@/lib/i18n";
 
 type WorkspaceEntry = { name: string; path: string; type: "file" | "directory" };
+export type TextSnapshot = { text: string; revision: string; encoding: "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be" };
 const client = axios.create({ baseURL: "/api/workspaces/files", headers: { "x-toonflow-workspace": "1" } });
+registerApiLanguage(client);
 const fileUrls = new Map<string, { directory: string; path: string; url: Promise<string>; users: number }>();
 
 function cachePath(path: string) {
@@ -28,14 +32,24 @@ export default function useWorkspaceFiles(directory?: MaybeRefOrGetter<string | 
     return path;
   }
 
-  async function list(path = "") {
-    const { data } = await client.get<{ data: { directory: string; empty: boolean; entries: WorkspaceEntry[] } }>("/list", { params: { directory: getDirectory(), path } });
+  async function list(path = "", signal?: AbortSignal) {
+    const { data } = await client.get<{ data: { directory: string; empty: boolean; entries: WorkspaceEntry[] } }>("/list", { params: { directory: getDirectory(), path }, signal });
     return data.data;
   }
 
   async function read(path: string) {
     const { data } = await client.get<ArrayBuffer>("/read", { params: { directory: getDirectory(), path }, responseType: "arraybuffer" });
     return data;
+  }
+
+  async function importImage(url: string) {
+    const { data } = await client.post<{ data: { path: string; mimeType: string } }>("/importImage", { directory: getDirectory(), url });
+    return data.data;
+  }
+
+  async function cloneProject(project: { url: string; name: string }, signal?: AbortSignal) {
+    const { data } = await client.post<{ data: { directory: string } }>("/clone", { directory: getDirectory(), ...project }, { baseURL: "/api/workspaces", signal });
+    return data.data;
   }
 
   function acquireUrl(path: string, mimeType?: string) {
@@ -66,11 +80,11 @@ export default function useWorkspaceFiles(directory?: MaybeRefOrGetter<string | 
     };
   }
 
-  async function readText(path: string, maxBytes?: number) {
+  async function readText(path: string, maxBytes?: number, signal?: AbortSignal) {
     if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 1)) throw new Error("读取字节数必须为正整数");
     try {
       const { data } = await client.get<string>("/read", {
-        params: { directory: getDirectory(), path }, responseType: "text", transformResponse: [],
+        params: { directory: getDirectory(), path }, responseType: "text", transformResponse: [], signal,
         headers: maxBytes === undefined ? undefined : { Range: `bytes=0-${maxBytes - 1}` },
       });
       return data;
@@ -80,8 +94,28 @@ export default function useWorkspaceFiles(directory?: MaybeRefOrGetter<string | 
     }
   }
 
-  async function readJson<T = unknown>(path: string): Promise<T> {
-    return JSON.parse(await readText(path));
+  async function readJson<T = unknown>(path: string, signal?: AbortSignal): Promise<T> {
+    const text = await readText(path, undefined, signal);
+    signal?.throwIfAborted();
+    return JSON.parse(text);
+  }
+
+  async function readTextSnapshot(path: string, options?: { maxBytes?: number; signal?: AbortSignal }): Promise<TextSnapshot> {
+    if (options?.maxBytes !== undefined && (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1)) throw new Error("读取字节数必须为正整数");
+    const { data } = await client.get<{ data: TextSnapshot }>("/read", {
+      params: { directory: getDirectory(), path, snapshot: true, maxBytes: options?.maxBytes }, signal: options?.signal,
+    });
+    return data.data;
+  }
+
+  async function writeTextSnapshot(path: string, text: string, snapshot: Pick<TextSnapshot, "revision" | "encoding">) {
+    const directory = getDirectory();
+    const { data } = await client.put<{ data: { revision: string } }>("/write", text, {
+      params: { directory, path, expectedRevision: snapshot.revision, encoding: snapshot.encoding },
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    invalidateUrls(directory, path);
+    return data.data.revision;
   }
 
   async function write(path: string, content: string | Blob | ArrayBuffer, exclusive = false, signal?: AbortSignal) {
@@ -101,6 +135,18 @@ export default function useWorkspaceFiles(directory?: MaybeRefOrGetter<string | 
     invalidateUrls(directory, target);
   }
 
+  async function copy(path: string, target: string) {
+    const directory = getDirectory();
+    await client.post("/copy", { directory, path, target });
+    invalidateUrls(directory, target);
+  }
+
+  async function reveal(path: string) {
+    if (isRemoteConnection) throw new Error("远程项目文件无法在本机文件管理器中定位，请下载或导出后查看。");
+    if (isMobile) throw new Error("移动端暂不支持在文件管理器中定位项目文件，请使用下载或导出保存文件。");
+    await client.post("/reveal", { directory: getDirectory(), path });
+  }
+
   async function remove(path: string, recursive = false) {
     const directory = getDirectory();
     await client.delete("/remove", { data: { directory, path, recursive } });
@@ -112,5 +158,5 @@ export default function useWorkspaceFiles(directory?: MaybeRefOrGetter<string | 
   }
 
   // ACT: 当前目录逐次读取；跨 await 或防抖的操作传入目录字符串，固定本次目标。
-  return { list, read, acquireUrl, readText, readJson, write, writeJson, rename, remove, mkdir };
+  return { list, read, importImage, cloneProject, acquireUrl, readText, readJson, readTextSnapshot, writeTextSnapshot, write, writeJson, rename, copy, reveal, remove, mkdir };
 }

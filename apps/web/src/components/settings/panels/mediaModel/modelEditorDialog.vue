@@ -77,7 +77,7 @@
         </template>
         <details class="modelOptions">
           <summary>更多配置（JSON）</summary>
-          <el-input v-model="options" type="textarea" :rows="6" resize="vertical" aria-label="模型的更多配置" />
+          <el-input v-model="options" type="textarea" dir="ltr" :rows="6" resize="vertical" aria-label="模型的更多配置" />
         </details>
       </el-form>
     </div>

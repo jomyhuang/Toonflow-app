@@ -20,7 +20,7 @@
               <div v-else-if="!rows.length" class="mentionStatus" role="status">{{ emptyText }}</div>
               <div class="mentionRows" :style="{ height: `${listVirtualizer.getTotalSize()}px` }">
                 <button v-for="{ row, index, start } in visibleRows" :id="`${listId}-${index}`" :key="`${row.kind}-${row.id}`" class="mentionItem" :style="{ transform: `translateY(${start}px)` }" :class="{ active: index === activeIndex, unavailable: !row.available, checked: row.kind === 'output' && selectedOutputs.includes(row.id) }" type="button" role="option" :aria-selected="row.kind === 'output' ? selectedOutputs.includes(row.id) : index === activeIndex" :aria-disabled="!row.available || selecting" :aria-posinset="index + 1" :aria-setsize="rows.length" :title="row.name" @mouseenter="activeIndex = index" @mousedown.prevent @click="chooseRow(row)">
-                  <mentionThumbnail :thumbnail="row.thumbnail" :directory="directory" :globalAsset="row.kind === 'file'"><component :is="row.kind === 'canvas' ? IconLayoutGrid : row.kind === 'directory' ? IconFolder : row.dataType === 'image' || row.dataType === 'mask' ? IconPhoto : row.dataType === 'video' ? IconMovie : row.dataType === 'audio' ? IconMusic : row.dataType ? IconFileText : IconBox" :size="18" /></mentionThumbnail>
+                  <mentionThumbnail :thumbnail="row.thumbnail" :directory="directory" :globalAsset="row.kind === 'file'"><component :is="row.kind === 'canvas' ? IconVector : row.kind === 'directory' ? IconFolder : row.dataType === 'image' || row.dataType === 'mask' ? IconPhoto : row.dataType === 'video' ? IconVideo : row.dataType === 'audio' ? IconMusic : row.dataType ? IconFileText : IconBox" :size="18" /></mentionThumbnail>
                   <span class="mentionContent"><span class="mentionName">{{ row.name }}</span><span v-if="row.description" class="mentionDescription">{{ row.description }}</span></span>
                   <span v-if="!row.available" class="mentionState">{{ row.kind === 'file' ? '不支持' : '暂无输出' }}</span>
                   <span v-else-if="row.kind === 'output'" class="mentionCheck" :class="{ selected: selectedOutputs.includes(row.id) }"><icon-check v-if="selectedOutputs.includes(row.id)" :size="12" /></span>
@@ -39,10 +39,12 @@
 </template>
 
 <script setup lang="ts">
+import { translate } from "@toonflow/i18n/vue";
+
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch, type CSSProperties } from "vue";
 import { ClickOutside as vClickOutside, type ScrollbarInstance } from "element-plus";
 import { useVirtualizer } from "@tanstack/vue-virtual";
-import { IconAt, IconBox, IconCheck, IconChevronLeft, IconChevronRight, IconFileText, IconFolder, IconLayoutGrid, IconMovie, IconMusic, IconPhoto, IconSearch, IconX } from "@tabler/icons-vue";
+import { IconAt, IconBox, IconCheck, IconChevronLeft, IconChevronRight, IconFileText, IconFolder, IconVector, IconVideo, IconMusic, IconPhoto, IconSearch, IconX } from "@tabler/icons-vue";
 import type { AgentMention } from "@toonflow/server/agent/types";
 import { mentionAssetType } from "@toonflow/server/agent/mentionSources";
 import { useMentionSources, type MentionAsset, type MentionNode, type MentionOutput } from "./mentionSources";
@@ -52,7 +54,7 @@ const props = defineProps<{ directory?: string; active: boolean; disabled: boole
 const emit = defineEmits<{ select: [mentions: AgentMention[]]; dismiss: []; open: [] }>();
 const sources = useMentionSources(() => props.directory);
 const listId = useId();
-const scopes = [{ id: "current", name: "当前画布" }, { id: "other", name: "其他画布" }, { id: "assets", name: "全局素材" }] as const;
+const scopes = [{ id: "current", get name() { return translate("当前画布"); } }, { id: "other", get name() { return translate("其他画布"); } }, { id: "assets", get name() { return translate("全局素材"); } }] as const;
 type MentionScope = typeof scopes[number]["id"];
 type MentionRow = { id: string; name: string; kind: "canvas" | "node" | "output" | "file" | "directory"; available: boolean; description: string; dataType?: string; thumbnail?: { url: string; mimeType: string }; outputCount: number };
 const typeLabels: Record<string, string> = { STRING: "文本", INT: "整数", FLOAT: "数字", BOOLEAN: "布尔值", IMAGE: "图片", MASK: "遮罩", VIDEO: "视频", AUDIO: "音频", FILE: "文件" };
@@ -85,12 +87,12 @@ const searchText = computed(() => search.value.trim().toLocaleLowerCase());
 const filteredCanvases = computed(() => canvases.value.filter(item => item.id !== (props.currentCanvasId ?? sources.currentCanvasId()) && `${item.name} ${item.id}`.toLocaleLowerCase().includes(searchText.value)));
 const filteredOutputs = computed(() => outputs.value.filter(item => `${item.name} ${item.preview}`.toLocaleLowerCase().includes(searchText.value)));
 const rows = computed<MentionRow[]>(() => {
-  if (listingCanvases.value) return filteredCanvases.value.map(item => ({ ...item, kind: "canvas", available: true, description: "画布", outputCount: 0 }));
-  if (selectedNode.value) return filteredOutputs.value.map(item => ({ ...item, kind: "output", dataType: item.dataType.toLocaleLowerCase(), description: typeLabels[item.dataType] ?? "数据", outputCount: 0 }));
+  if (listingCanvases.value) return filteredCanvases.value.map(item => ({ ...item, kind: "canvas", available: true, description: translate("画布"), outputCount: 0 }));
+  if (selectedNode.value) return filteredOutputs.value.map(item => ({ ...item, kind: "output", dataType: item.dataType.toLocaleLowerCase(), description: typeLabels[item.dataType] ?? translate("数据"), outputCount: 0 }));
   if (scope.value === "assets") return assets.value.map(item => ({ ...item, id: item.path, kind: item.type, available: item.type === "directory" || !!item.dataType, dataType: item.dataType?.toLocaleLowerCase(),
     thumbnail: ["IMAGE", "MASK", "VIDEO"].includes(item.dataType ?? "") ? { url: item.path, mimeType: mentionAssetType(item.path).mimeType } : undefined,
-    description: item.type === "directory" ? "文件夹" : typeLabels[item.dataType ?? ""] ?? "文件", outputCount: 0 }));
-  return nodes.value.map(item => ({ ...item, kind: "node", dataType: item.dataType?.toLocaleLowerCase(), description: typeLabels[item.dataType ?? ""] ?? "节点", outputCount: item.outputCount }));
+    description: item.type === "directory" ? translate("文件夹") : typeLabels[item.dataType ?? ""] ?? translate("文件"), outputCount: 0 }));
+  return nodes.value.map(item => ({ ...item, kind: "node", dataType: item.dataType?.toLocaleLowerCase(), description: typeLabels[item.dataType ?? ""] ?? translate("节点"), outputCount: item.outputCount }));
 });
 const listVirtualizer = useVirtualizer<HTMLDivElement, HTMLButtonElement>(computed(() => ({
   count: rows.value.length,
@@ -102,9 +104,9 @@ const listVirtualizer = useVirtualizer<HTMLDivElement, HTMLButtonElement>(comput
 })));
 const visibleRows = computed(() => listVirtualizer.value.getVirtualItems().map(item => ({ row: rows.value[item.index]!, index: item.index, start: item.start })));
 const hasMore = computed(() => !listingCanvases.value && !selectedNode.value && !!nextCursor.value);
-const breadcrumb = computed(() => selectedNode.value ? [selectedCanvas.value?.name ?? "当前画布", selectedNode.value.name].join(" / ") : selectedCanvas.value?.name ?? assetPath.value);
+const breadcrumb = computed(() => selectedNode.value ? [selectedCanvas.value?.name ?? translate("当前画布"), selectedNode.value.name].join(" / ") : selectedCanvas.value?.name ?? assetPath.value);
 const searchPlaceholder = computed(() => selectedNode.value ? "搜索该节点的输出" : listingCanvases.value ? "搜索其他画布" : scope.value === "assets" ? "搜索素材" : "搜索节点名称或 ID");
-const emptyText = computed(() => scope.value === "current" && !canvasId.value ? "打开画布后即可提及节点输出" : search.value ? "没有找到匹配的内容" : selectedNode.value ? "该节点暂无可用输出" : listingCanvases.value ? "暂无其他画布" : scope.value === "assets" ? "暂无素材" : "当前画布暂无节点");
+const emptyText = computed(() => scope.value === "current" && !canvasId.value ? translate("打开画布后即可提及节点输出") : search.value ? translate("没有找到匹配的内容") : selectedNode.value ? translate("该节点暂无可用输出") : listingCanvases.value ? translate("暂无其他画布") : scope.value === "assets" ? translate("暂无素材") : translate("当前画布暂无节点"));
 let requestController: AbortController | undefined;
 let selectionController: AbortController | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -144,7 +146,7 @@ async function loadList(append = false) {
   loadError.value = "";
   try {
     if (listingCanvases.value) {
-      const result = await sources.canvases();
+      const result = await sources.canvases(controller.signal);
       if (controller.signal.aborted) return;
       canvases.value = result;
     } else if (scope.value === "assets") {

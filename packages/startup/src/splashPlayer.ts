@@ -1,5 +1,5 @@
 import { dlopen, ptr } from "bun:ffi";
-import { readFileSync } from "node:fs";
+import { readFileSync } from "@toonflow/file";
 import { join, resolve } from "node:path";
 
 export function createSplashPlayer(assetDir: string, width: number, height: number, pixels: Uint8Array) {

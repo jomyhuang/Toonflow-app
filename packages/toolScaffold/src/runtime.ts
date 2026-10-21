@@ -1,10 +1,17 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Rule } from "@form-create/element-ui";
 import type { FfmpegFactory } from "@toonflow/ffmpeg/types";
+import type { Stats } from "@toonflow/file";
 import { z } from "zod";
 
 export type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 export type { FfmpegFactory, FfmpegCommand, FfprobeData } from "@toonflow/ffmpeg/types";
+
+export const asrRequestSchema = z.strictObject({
+  path: z.string().min(1).max(4096).refine(path => !/^(?:[\\/]|[a-z][a-z\d+.-]*:)/i.test(path)
+    && !path.replaceAll("\\", "/").split("/").includes(".."), "音频路径必须位于工作区内"),
+  lang: z.string().min(1).max(100).optional(),
+});
 
 export const toolNameSchema = z.string().max(96).regex(/^[a-z][a-zA-Z0-9]*$/);
 export const toolMetadataSchema = z.object({
@@ -71,6 +78,7 @@ export interface CanvasContext extends CanvasInfo {
 }
 
 export interface MediaModel {
+  supportsPrice?: boolean;
   providerId: string;
   providerLabel: string;
   modelId: string;
@@ -107,6 +115,8 @@ export interface MediaGenerationRequest {
   voice?: string;
   speed?: number;
   volume?: number;
+  pitch?: number;
+  language?: string;
   format?: string;
   sampleRate?: number;
   mode?: "singleImage" | "startEndRequired" | "endFrameOptional" | "startFrameOptional" | "text"
@@ -172,7 +182,29 @@ export interface SkillContext {
   update(request: SkillLocation & { content: string }, signal?: AbortSignal): Promise<Omit<SkillDocument, "content">>;
 }
 
+export interface ToolFiles {
+  readFile(path: string, readOnly?: boolean): Promise<Buffer>;
+  access(path: string, readOnly?: boolean): Promise<void>;
+  stat(path: string, readOnly?: boolean): Promise<Stats>;
+  readdir(path: string, readOnly?: boolean): Promise<string[]>;
+  detectImageMimeType(path: string, readOnly?: boolean): Promise<string | null>;
+  writeFile(path: string, content: string | Uint8Array, exclusive?: boolean): Promise<void>;
+  mkdir(path: string, recursive?: boolean): Promise<void>;
+  rename(path: string, target: string): Promise<void>;
+  remove(path: string, recursive?: boolean): Promise<void>;
+  copyFile(path: string, target: string, exclusive?: boolean): Promise<void>;
+  importImage(url: string): Promise<{ path: string; mimeType: string }>;
+}
+
 export interface ToolContext {
+  asr: {
+    transcribe(path: string, options?: { lang?: string; signal?: AbortSignal }): Promise<string>;
+  };
+  assets?: { execute: ToolDefinition["execute"] };
+  browser?: {
+    execute(sessionId: string, args: Record<string, unknown>, config: Record<string, unknown>, signal?: AbortSignal,
+      onUpdate?: Parameters<ToolDefinition["execute"]>[3]): ReturnType<ToolDefinition["execute"]>;
+  };
   ffmpeg(signal?: AbortSignal): Promise<FfmpegFactory>;
   media?: MediaContext;
   canvas?: CanvasContext;
@@ -180,6 +212,7 @@ export interface ToolContext {
   skills?: SkillContext;
   cwd: string;
   config: Record<string, unknown>;
+  files: ToolFiles;
   resolvePath(path: string, readOnly?: boolean): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   sdk: Pick<typeof import("@earendil-works/pi-coding-agent"),

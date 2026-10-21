@@ -1,6 +1,6 @@
 import fg from "fast-glob";
 import path from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeAtomic } from "@toonflow/file";
 
 function fileNameToRoutePath(fileName: string): string {
   let routePath = fileName.replace(/\.(ts)$/, "");
@@ -41,7 +41,7 @@ export default async function generateRouter(): Promise<void> {
     throw error;
   });
   // ACT: 比较完整产物，路由模板变化时也重新生成。
-  if (current !== content) await writeFile(routerPath, content, "utf8");
+  if (current !== content) await writeAtomic(routerPath, content, { mode: 0o666 });
 }
 
 if (import.meta.main) await generateRouter();

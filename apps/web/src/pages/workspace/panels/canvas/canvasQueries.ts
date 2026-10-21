@@ -139,7 +139,7 @@ export function createCanvasQueries(source: {
   selectedCount(): number;
   nodeRevision(): number;
   edgeRevision(): number;
-  canvases(): { id: string; name: string }[];
+  canvases(signal?: AbortSignal): Promise<{ id: string; name: string }[]>;
   nodeTypes(): { type: string; label: string }[];
   nodeTools(): NodeToolsContext;
 }) {
@@ -157,7 +157,7 @@ export function createCanvasQueries(source: {
     if (args.canvasId !== undefined && args.canvasId !== canvasId) throw new Error("目标画布已切换，请重新查询画布");
     const { cursor, ...filters } = args;
     const metadata = name === "getCanvas" ? {
-      canvases: (args as { include?: string[] }).include?.includes("canvases") ? source.canvases() : [],
+      canvases: (args as { include?: string[] }).include?.includes("canvases") ? await source.canvases(signal) : [],
       types: (args as { include?: string[] }).include?.includes("nodeTypes") ? source.nodeTypes() : [],
     } : undefined;
     const digest = await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify([name, filters, metadata])));

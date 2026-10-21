@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, unlink, writeFile } from "@toonflow/file";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type { AgentCard } from "@toonflow/teams-scaffold/a2a";
@@ -6,6 +6,7 @@ import conf from "@/utils/conf";
 import { decodeText, skillPath } from "@/utils/plugins/install";
 import { resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
 import { agentsDirectory, checkName, editablePath, maxBytes, readFiles, validateFiles, withTeamFiles } from "./files";
+import { translateMessage } from "@/lib/i18n";
 
 export { agentsDirectory, teamNamePattern } from "./files";
 export { installTeam } from "./install";
@@ -47,7 +48,7 @@ export async function listTeams() {
         local.push({ name, displayName, description, version, author, github, readme, enabled, loadError: "", kind: "local" as const });
       } catch (error) {
         local.push({ name: entry.name, displayName: entry.name, description: "", version: "", author: "", github: "", readme: "", enabled: false,
-          loadError: error instanceof Error ? error.message : String(error), kind: "local" as const });
+          loadError: translateMessage(error instanceof Error ? error.message : String(error)), kind: "local" as const });
       }
     }
     const remote = Object.values(conf.get("remoteConnections", {})).map(({ name, cardUrl, card, enabled }) => ({
